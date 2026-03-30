@@ -77,6 +77,18 @@ try {
 try {
   db.exec("ALTER TABLE tweets ADD COLUMN retweet_id INTEGER REFERENCES tweets(id)");
 } catch (e) {}
+try {
+  db.exec("ALTER TABLE users ADD COLUMN avatar_small TEXT DEFAULT ''");
+} catch (e) {}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tweet_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tweet_id INTEGER NOT NULL,
+    image_url TEXT NOT NULL,
+    FOREIGN KEY(tweet_id) REFERENCES tweets(id)
+  );
+`);
 
 // Seed Superuser
 const seedSuperuser = () => {
@@ -104,7 +116,8 @@ const authenticateToken = (req: any, res: Response, next: NextFunction) => {
 
 async function startServer() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ limit: '10mb', extended: true }));
   app.use(cookieParser());
 
   // --- Auth Routes ---
@@ -166,25 +179,42 @@ async function startServer() {
   });
 
   app.get('/api/auth/me', authenticateToken, (req: any, res) => {
-    const user = db.prepare('SELECT id, username, bio, avatar, tier, invite_quota FROM users WHERE id = ?').get(req.user.id);
-    res.json(user);
+    const user = db.prepare('SELECT id, username, bio, avatar, avatar_small, tier, invite_quota FROM users WHERE id = ?').get(req.user.id);
+    res.json(user || null);
+  });
+
+  // --- Profile Routes ---
+  app.post('/api/settings/profile', authenticateToken, (req: any, res) => {
+    const { bio, avatar, avatar_small } = req.body;
+    db.prepare('UPDATE users SET bio = ?, avatar = ?, avatar_small = ? WHERE id = ?')
+      .run(bio || '', avatar || '', avatar_small || '', req.user.id);
+    res.json({ message: 'Profile updated' });
   });
 
   // --- Tweet Routes ---
   app.post('/api/tweets', authenticateToken, (req: any, res) => {
-    const { content, parent_id, retweet_id } = req.body;
-    if (!content && !retweet_id) return res.status(400).json({ error: 'Content or retweet required' });
+    const { content, parent_id, retweet_id, images } = req.body;
+    if (!content && !retweet_id && (!images || images.length === 0)) return res.status(400).json({ error: 'Content, retweet or images required' });
+    
     const result = db.prepare('INSERT INTO tweets (user_id, content, parent_id, retweet_id) VALUES (?, ?, ?, ?)').run(req.user.id, content || null, parent_id || null, retweet_id || null);
+    const tweetId = result.lastInsertRowid;
+
+    if (images && Array.isArray(images)) {
+      const insertImage = db.prepare('INSERT INTO tweet_images (tweet_id, image_url) VALUES (?, ?)');
+      for (const img of images.slice(0, 4)) {
+        insertImage.run(tweetId, img);
+      }
+    }
     
     if (parent_id) {
       const parentTweet: any = db.prepare('SELECT user_id FROM tweets WHERE id = ?').get(parent_id);
       if (parentTweet && parentTweet.user_id !== req.user.id) {
         db.prepare('INSERT INTO notifications (user_id, actor_id, type, target_id) VALUES (?, ?, ?, ?)')
-          .run(parentTweet.user_id, req.user.id, 'reply', result.lastInsertRowid);
+          .run(parentTweet.user_id, req.user.id, 'reply', tweetId);
       }
     }
 
-    res.json({ id: result.lastInsertRowid, content, user_id: req.user.id });
+    res.json({ id: tweetId, content, user_id: req.user.id });
   });
 
   app.delete('/api/tweets/:id', authenticateToken, (req: any, res) => {
@@ -193,6 +223,7 @@ async function startServer() {
     if (tweet.user_id !== req.user.id) return res.status(403).json({ error: 'Unauthorized' });
 
     db.prepare('DELETE FROM likes WHERE tweet_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM tweet_images WHERE tweet_id = ?').run(req.params.id);
     db.prepare("DELETE FROM notifications WHERE target_id = ? AND type IN ('like', 'reply')").run(req.params.id);
     db.prepare('DELETE FROM tweets WHERE id = ? OR parent_id = ?').run(req.params.id, req.params.id);
     
@@ -211,10 +242,18 @@ async function startServer() {
     res.json({ id: result.lastInsertRowid, message: 'Retweeted' });
   });
 
+  const enrichTweets = (tweets: any[]) => {
+    return tweets.map(t => {
+      const targetId = t.retweet_id || t.id;
+      const images = db.prepare('SELECT image_url FROM tweet_images WHERE tweet_id = ?').all(targetId);
+      return { ...t, images: images.map((img: any) => img.image_url) };
+    });
+  };
+
   app.get('/api/tweets/following', authenticateToken, (req: any, res) => {
     const tweets = db.prepare(`
-      SELECT t.*, u.username, u.avatar, u.tier,
-      rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, rt.created_at as original_created_at,
+      SELECT t.*, u.username, u.avatar, u.avatar_small, u.tier,
+      rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, ru.avatar_small as original_avatar_small, rt.created_at as original_created_at,
       (SELECT COUNT(*) FROM likes WHERE tweet_id = t.id OR tweet_id = t.retweet_id) as likes_count,
       (SELECT 1 FROM likes WHERE (tweet_id = t.id OR tweet_id = t.retweet_id) AND user_id = ?) as is_liked,
       (SELECT COUNT(*) FROM tweets WHERE retweet_id = t.id OR (t.retweet_id IS NOT NULL AND retweet_id = t.retweet_id)) as retweets_count,
@@ -228,13 +267,13 @@ async function startServer() {
       AND t.parent_id IS NULL
       ORDER BY t.created_at DESC
     `).all(req.user.id, req.user.id, req.user.id, req.user.id);
-    res.json(tweets);
+    res.json(enrichTweets(tweets));
   });
 
   app.get('/api/tweets/explore', authenticateToken, (req: any, res) => {
     const tweets = db.prepare(`
-      SELECT DISTINCT t.*, u.username, u.avatar, u.tier,
-      rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, rt.created_at as original_created_at,
+      SELECT DISTINCT t.*, u.username, u.avatar, u.avatar_small, u.tier,
+      rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, ru.avatar_small as original_avatar_small, rt.created_at as original_created_at,
       (SELECT COUNT(*) FROM likes WHERE tweet_id = t.id OR tweet_id = t.retweet_id) as likes_count,
       (SELECT 1 FROM likes WHERE (tweet_id = t.id OR tweet_id = t.retweet_id) AND user_id = ?) as is_liked,
       (SELECT COUNT(*) FROM tweets WHERE retweet_id = t.id OR (t.retweet_id IS NOT NULL AND retweet_id = t.retweet_id)) as retweets_count,
@@ -251,13 +290,13 @@ async function startServer() {
       ORDER BY t.created_at DESC
       LIMIT 50
     `).all(req.user.id, req.user.id, req.user.id, req.user.id);
-    res.json(tweets);
+    res.json(enrichTweets(tweets));
   });
 
   app.get('/api/tweets/user/:username', authenticateToken, (req: any, res) => {
     const tweets = db.prepare(`
-      SELECT t.*, u.username, u.avatar, u.tier,
-      rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, rt.created_at as original_created_at,
+      SELECT t.*, u.username, u.avatar, u.avatar_small, u.tier,
+      rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, ru.avatar_small as original_avatar_small, rt.created_at as original_created_at,
       (SELECT COUNT(*) FROM likes WHERE tweet_id = t.id OR tweet_id = t.retweet_id) as likes_count,
       (SELECT 1 FROM likes WHERE (tweet_id = t.id OR tweet_id = t.retweet_id) AND user_id = ?) as is_liked,
       (SELECT COUNT(*) FROM tweets WHERE retweet_id = t.id OR (t.retweet_id IS NOT NULL AND retweet_id = t.retweet_id)) as retweets_count,
@@ -271,7 +310,7 @@ async function startServer() {
       AND t.parent_id IS NULL
       ORDER BY t.created_at DESC
     `).all(req.user.id, req.user.id, req.params.username);
-    res.json(tweets);
+    res.json(enrichTweets(tweets));
   });
 
   app.post('/api/tweets/:id/like', authenticateToken, (req: any, res) => {
@@ -294,8 +333,8 @@ async function startServer() {
   app.get('/api/tweets/:id', authenticateToken, (req: any, res) => {
     const tweetId = req.params.id;
     const tweet: any = db.prepare(`
-      SELECT t.*, u.username, u.avatar, u.tier,
-      rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, rt.created_at as original_created_at,
+      SELECT t.*, u.username, u.avatar, u.avatar_small, u.tier,
+      rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, ru.avatar_small as original_avatar_small, rt.created_at as original_created_at,
       (SELECT COUNT(*) FROM likes WHERE tweet_id = t.id OR tweet_id = t.retweet_id) as likes_count,
       (SELECT 1 FROM likes WHERE (tweet_id = t.id OR tweet_id = t.retweet_id) AND user_id = ?) as is_liked,
       (SELECT COUNT(*) FROM tweets WHERE retweet_id = t.id OR (t.retweet_id IS NOT NULL AND retweet_id = t.retweet_id)) as retweets_count,
@@ -310,10 +349,12 @@ async function startServer() {
 
     if (!tweet) return res.status(404).json({ error: 'Tweet not found' });
 
+    const enrichedTweet = enrichTweets([tweet])[0];
+
     let parent = null;
     if (tweet.parent_id) {
       parent = db.prepare(`
-        SELECT t.*, u.username, u.avatar, u.tier,
+        SELECT t.*, u.username, u.avatar, u.avatar_small, u.tier,
         (SELECT COUNT(*) FROM likes WHERE tweet_id = t.id) as likes_count,
         (SELECT 1 FROM likes WHERE tweet_id = t.id AND user_id = ?) as is_liked,
         (SELECT COUNT(*) FROM tweets WHERE retweet_id = t.id) as retweets_count,
@@ -323,10 +364,11 @@ async function startServer() {
         JOIN users u ON t.user_id = u.id
         WHERE t.id = ?
       `).get(req.user.id, req.user.id, tweet.parent_id);
+      if (parent) parent = enrichTweets([parent])[0];
     }
 
     const replies = db.prepare(`
-      SELECT t.*, u.username, u.avatar, u.tier,
+      SELECT t.*, u.username, u.avatar, u.avatar_small, u.tier,
       (SELECT COUNT(*) FROM likes WHERE tweet_id = t.id) as likes_count,
       (SELECT 1 FROM likes WHERE tweet_id = t.id AND user_id = ?) as is_liked,
       (SELECT COUNT(*) FROM tweets WHERE retweet_id = t.id) as retweets_count,
@@ -338,7 +380,7 @@ async function startServer() {
       ORDER BY t.created_at ASC
     `).all(req.user.id, req.user.id, tweetId);
 
-    res.json({ tweet, replies, parent });
+    res.json({ tweet: enrichedTweet, replies: enrichTweets(replies), parent });
   });
 
   // --- User Routes ---
@@ -358,7 +400,7 @@ async function startServer() {
 
   app.get('/api/users/:username', authenticateToken, (req: any, res) => {
     const user: any = db.prepare(`
-      SELECT id, username, bio, avatar, tier,
+      SELECT id, username, bio, avatar, avatar_small, tier,
       (SELECT COUNT(*) FROM follows WHERE follower_id = users.id) as following_count,
       (SELECT COUNT(*) FROM follows WHERE following_id = users.id) as followers_count,
       (SELECT COUNT(*) FROM tweets WHERE user_id = users.id) as tweets_count,
@@ -366,7 +408,7 @@ async function startServer() {
       FROM users WHERE username = ?
     `).get(req.user.id, req.params.username);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json(user);
+    res.json(user || null);
   });
 
   app.post('/api/users/:id/follow', authenticateToken, (req: any, res) => {

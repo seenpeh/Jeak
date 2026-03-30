@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, ChangeEvent } from 'react';
 import { 
   Home, 
   Compass, 
@@ -16,9 +16,17 @@ import {
   Bell,
   Trash2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Image as ImageIcon,
+  ChevronLeft,
+  ChevronRight,
+  Camera,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import Cropper from 'react-easy-crop';
+import { getCroppedImgCanvas, resizeImage, compressImage, fileToBase64 } from './lib/imageUtils';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { ThemeProvider, useTheme } from './ThemeContext';
@@ -33,6 +41,7 @@ interface Tweet {
   user_id: number;
   username: string;
   avatar: string;
+  avatar_small?: string;
   content: string;
   created_at: string;
   likes_count: number;
@@ -44,7 +53,9 @@ interface Tweet {
   original_content?: string;
   original_username?: string;
   original_avatar?: string;
+  original_avatar_small?: string;
   original_created_at?: string;
+  images?: string[];
 }
 
 interface UserProfile {
@@ -52,6 +63,7 @@ interface UserProfile {
   username: string;
   bio: string;
   avatar: string;
+  avatar_small?: string;
   tier: number;
   following_count: number;
   followers_count: number;
@@ -59,7 +71,107 @@ interface UserProfile {
   is_following?: boolean;
 }
 
-// --- Components ---
+const ImageGrid = ({ images, onImageClick }: { images: string[], onImageClick: (index: number) => void }) => {
+  if (!images || images.length === 0) return null;
+
+  const gridStyles = {
+    1: 'grid-cols-1',
+    2: 'grid-cols-2',
+    3: 'grid-cols-2',
+    4: 'grid-cols-2',
+  };
+
+  return (
+    <div className={cn('grid gap-1 mt-3 rounded-2xl overflow-hidden border border-black/10 dark:border-white/10', gridStyles[images.length as keyof typeof gridStyles])}>
+      {images.map((img, i) => (
+        <div 
+          key={i} 
+          className={cn(
+            'relative cursor-pointer hover:opacity-90 transition-opacity aspect-video',
+            images.length === 3 && i === 0 && 'row-span-2 aspect-auto'
+          )}
+          onClick={(e) => {
+            e.stopPropagation();
+            onImageClick(i);
+          }}
+        >
+          <img 
+            src={img} 
+            alt={`Post image ${i + 1}`} 
+            className="w-full h-full object-cover"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const Lightbox = ({ images, initialIndex, onClose }: { images: string[], initialIndex: number, onClose: () => void }) => {
+  const [index, setIndex] = useState(initialIndex);
+
+  const handlePrev = (e: any) => {
+    e.stopPropagation();
+    setIndex(prev => (prev > 0 ? prev - 1 : images.length - 1));
+  };
+
+  const handleNext = (e: any) => {
+    e.stopPropagation();
+    setIndex(prev => (prev < images.length - 1 ? prev + 1 : 0));
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[100] bg-black flex items-center justify-center"
+      onClick={onClose}
+    >
+      <button 
+        className="absolute top-6 right-6 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white z-[101]"
+        onClick={onClose}
+      >
+        <X size={24} />
+      </button>
+
+      {images.length > 1 && (
+        <>
+          <button 
+            className="absolute left-6 p-3 rounded-full bg-white/10 hover:bg-white/20 text-white z-[101]"
+            onClick={handlePrev}
+          >
+            <ChevronLeft size={32} />
+          </button>
+          <button 
+            className="absolute right-6 p-3 rounded-full bg-white/10 hover:bg-white/20 text-white z-[101]"
+            onClick={handleNext}
+          >
+            <ChevronRight size={32} />
+          </button>
+        </>
+      )}
+
+      <div className="w-full h-full flex items-center justify-center p-4">
+        <motion.img 
+          key={index}
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          src={images[index]} 
+          alt="Full screen"
+          className="max-w-full max-h-full object-contain"
+          referrerPolicy="no-referrer"
+        />
+      </div>
+
+      {images.length > 1 && (
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-black/50 text-white text-sm font-medium">
+          {index + 1} / {images.length}
+        </div>
+      )}
+    </motion.div>
+  );
+};
 
 const Button = ({ className, variant = 'primary', ...props }: any) => {
   const variants = {
@@ -101,13 +213,14 @@ interface TweetCardProps {
   currentUserId?: number;
 }
 
-const TweetCard = ({ tweet, onLike, onRetweet, onReply, onNavigate, onViewTweet, onDelete, currentUserId }: TweetCardProps) => {
+const TweetCard = ({ tweet, onLike, onRetweet, onReply, onNavigate, onViewTweet, onDelete, currentUserId, onImageClick }: TweetCardProps & { onImageClick?: (images: string[], index: number) => void }) => {
   const isRetweet = !!tweet.retweet_id;
   const displayContent = isRetweet ? tweet.original_content : tweet.content;
   const displayUsername = isRetweet ? tweet.original_username : tweet.username;
-  const displayAvatar = isRetweet ? tweet.original_avatar : tweet.avatar;
+  const displayAvatar = isRetweet ? (tweet.original_avatar_small || tweet.original_avatar) : (tweet.avatar_small || tweet.avatar);
   const displayCreatedAt = isRetweet ? tweet.original_created_at : tweet.created_at;
   const displayTier = isRetweet ? 1 : tweet.tier; // Only show blue tick for original author if they are superuser
+  const images = tweet.images || [];
 
   return (
     <div 
@@ -128,7 +241,7 @@ const TweetCard = ({ tweet, onLike, onRetweet, onReply, onNavigate, onViewTweet,
           }}
           className="w-10 h-10 rounded-full bg-black/10 dark:bg-white/10 flex-shrink-0 overflow-hidden active:scale-90 transition-transform"
         >
-          {displayAvatar && <img src={displayAvatar} alt={displayUsername} className="w-full h-full object-cover" />}
+          {displayAvatar && <img src={displayAvatar} alt={displayUsername} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
         </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1">
@@ -160,7 +273,13 @@ const TweetCard = ({ tweet, onLike, onRetweet, onReply, onNavigate, onViewTweet,
             )}
           </div>
           <p className="text-[15px] leading-relaxed mb-3 whitespace-pre-wrap">{displayContent}</p>
-          <div className="flex justify-between max-w-xs text-black/40 dark:text-white/40">
+          
+          <ImageGrid 
+            images={images} 
+            onImageClick={(index) => onImageClick?.(images, index)} 
+          />
+
+          <div className="flex justify-between max-w-xs text-black/40 dark:text-white/40 mt-3">
             <button 
               onClick={(e) => {
                 e.stopPropagation();
@@ -220,24 +339,40 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
 
+  const [lightbox, setLightbox] = useState<{ images: string[], index: number } | null>(null);
+
   const triggerRefresh = () => setRefreshKey(prev => prev + 1);
 
   const fetchUnread = async () => {
-    const res = await fetch('/api/notifications/unread-count');
-    if (res.ok) {
-      const data = await res.json();
-      setUnreadCount(data.count);
+    try {
+      const res = await fetch('/api/notifications/unread-count');
+      if (res.ok) {
+        const data = await res.json();
+        setUnreadCount(data.count);
+      }
+    } catch (e) {
+      // Only log if we are still logged in and it's not a generic network error
+      if (user && !(e instanceof TypeError && e.message === 'Failed to fetch')) {
+        console.error('Failed to fetch unread count:', e);
+      }
     }
   };
 
   useEffect(() => {
-    fetch('/api/auth/me')
-      .then(res => res.ok ? res.json() : null)
-      .then(data => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch('/api/auth/me');
+        const data = res.ok ? await res.json() : null;
         setUser(data);
-        setLoading(false);
         if (data) fetchUnread();
-      });
+      } catch (e) {
+        console.error('Auth check failed:', e);
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+    checkAuth();
   }, []);
 
   useEffect(() => {
@@ -248,7 +383,11 @@ export default function App() {
   }, [user]);
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) {
+      console.error('Logout failed:', e);
+    }
     setUser(null);
   };
 
@@ -278,15 +417,28 @@ export default function App() {
 
   const handleDeleteTweet = async () => {
     if (!confirmDelete) return;
-    const res = await fetch(`/api/tweets/${confirmDelete}`, { method: 'DELETE' });
-    if (res.ok) {
-      setConfirmDelete(null);
-      triggerRefresh();
+    try {
+      const res = await fetch(`/api/tweets/${confirmDelete}`, { method: 'DELETE' });
+      if (res.ok) {
+        setConfirmDelete(null);
+        triggerRefresh();
+      }
+    } catch (e) {
+      console.error('Failed to delete tweet:', e);
     }
   };
 
   return (
     <ThemeProvider>
+      <AnimatePresence>
+        {lightbox && (
+          <Lightbox 
+            images={lightbox.images} 
+            initialIndex={lightbox.index} 
+            onClose={() => setLightbox(null)} 
+          />
+        )}
+      </AnimatePresence>
       <div className="min-h-screen bg-white dark:bg-black text-black dark:text-white selection:bg-black selection:text-white dark:selection:bg-white dark:selection:text-black">
         <div className="max-w-2xl mx-auto pb-20 md:pb-0 md:pl-64">
           {/* Sidebar (Desktop) */}
@@ -314,13 +466,13 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
               >
-                {view === 'following' && <FeedView type="following" onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} />}
-                {view === 'explore' && <FeedView type="explore" onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} />}
+                {view === 'following' && <FeedView type="following" onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
+                {view === 'explore' && <FeedView type="explore" onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
                 {view === 'notifications' && <NotificationsView onNavigate={navigateToProfile} onViewTweet={navigateToTweet} refreshKey={refreshKey} />}
-                {view === 'search' && <SearchView onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} />}
-                {view === 'profile' && <ProfileView username={targetUsername || user.username} isOwn={!targetUsername || targetUsername === user.username} setView={setView} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} onDelete={setConfirmDelete} currentUserId={user.id} refreshKey={refreshKey} />}
+                {view === 'search' && <SearchView onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
+                {view === 'profile' && <ProfileView username={targetUsername || user.username} isOwn={!targetUsername || targetUsername === user.username} setView={setView} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} onDelete={setConfirmDelete} currentUserId={user.id} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
                 {view === 'settings' && <SettingsView user={user} setView={setView} onUpdateUser={setUser} />}
-                {view === 'tweet-detail' && <TweetDetailView tweetId={selectedTweetId!} onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} onBack={() => setView(previousView)} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} />}
+                {view === 'tweet-detail' && <TweetDetailView tweetId={selectedTweetId!} onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} onBack={() => setView(previousView)} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
                 {view === 'follower-list' && <UserListView username={targetUsername!} type="followers" onNavigate={navigateToProfile} onBack={() => setView('profile')} />}
                 {view === 'following-list' && <UserListView username={targetUsername!} type="following" onNavigate={navigateToProfile} onBack={() => setView('profile')} />}
               </motion.div>
@@ -411,15 +563,22 @@ function NavItems({ active, setView, mobile, unreadCount }: any) {
   );
 }
 
-function FeedView({ type, onNavigate, onReply, onViewTweet, currentUserId, onDelete, refreshKey }: { type: 'following' | 'explore', onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number }) {
+function FeedView({ type, onNavigate, onReply, onViewTweet, currentUserId, onDelete, refreshKey, onImageClick }: { type: 'following' | 'explore', onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number, onImageClick?: (images: string[], index: number) => void }) {
   const [tweets, setTweets] = useState<Tweet[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchTweets = async () => {
-    const res = await fetch(`/api/tweets/${type}`);
-    const data = await res.json();
-    setTweets(data);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/tweets/${type}`);
+      if (res.ok) {
+        const data = await res.json();
+        setTweets(Array.isArray(data) ? data : []);
+      }
+    } catch (e) {
+      console.error('Failed to fetch tweets:', e);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -427,7 +586,11 @@ function FeedView({ type, onNavigate, onReply, onViewTweet, currentUserId, onDel
   }, [type, refreshKey]);
 
   const handleLike = async (id: number) => {
-    await fetch(`/api/tweets/${id}/like`, { method: 'POST' });
+    try {
+      await fetch(`/api/tweets/${id}/like`, { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to like tweet:', e);
+    }
     setTweets(prev => prev.map(t => {
       const targetId = t.retweet_id || t.id;
       if (targetId === id) {
@@ -442,7 +605,11 @@ function FeedView({ type, onNavigate, onReply, onViewTweet, currentUserId, onDel
   };
 
   const handleRetweet = async (id: number) => {
-    await fetch(`/api/tweets/${id}/retweet`, { method: 'POST' });
+    try {
+      await fetch(`/api/tweets/${id}/retweet`, { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to retweet:', e);
+    }
     setTweets(prev => prev.map(t => {
       const targetId = t.retweet_id || t.id;
       if (targetId === id) {
@@ -480,13 +647,26 @@ function NotificationsView({ onNavigate, onViewTweet, refreshKey }: { onNavigate
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/notifications')
-      .then(res => res.json())
-      .then(data => {
-        setNotifications(data);
+    const loadNotifications = async () => {
+      try {
+        const res = await fetch('/api/notifications');
+        const data = res.ok ? await res.json() : [];
+        setNotifications(Array.isArray(data) ? data : []);
+        
+        // Mark as read
+        try {
+          await fetch('/api/notifications/read', { method: 'POST' });
+        } catch (e) {
+          console.error('Failed to mark notifications as read:', e);
+        }
+      } catch (e) {
+        console.error('Failed to fetch notifications:', e);
+        setNotifications([]);
+      } finally {
         setLoading(false);
-        fetch('/api/notifications/read', { method: 'POST' });
-      });
+      }
+    };
+    loadNotifications();
   }, [refreshKey]);
 
   const getIcon = (type: string) => {
@@ -555,16 +735,22 @@ function NotificationsView({ onNavigate, onViewTweet, refreshKey }: { onNavigate
   );
 }
 
-function SearchView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete, refreshKey }: { onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number }) {
+function SearchView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete, refreshKey, onImageClick }: { onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number, onImageClick?: (images: string[], index: number) => void }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<{ users: any[], tweets: Tweet[] }>({ users: [], tweets: [] });
 
   const handleSearch = async (val: string) => {
     setQuery(val);
     if (val.length < 2) return;
-    const res = await fetch(`/api/users/search?q=${val}`);
-    const data = await res.json();
-    setResults(data);
+    try {
+      const res = await fetch(`/api/users/search?q=${val}`);
+      if (res.ok) {
+        const data = await res.json();
+        setResults(data);
+      }
+    } catch (e) {
+      console.error('Search failed:', e);
+    }
   };
 
   useEffect(() => {
@@ -572,7 +758,11 @@ function SearchView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete,
   }, [refreshKey]);
 
   const handleLike = async (id: number) => {
-    await fetch(`/api/tweets/${id}/like`, { method: 'POST' });
+    try {
+      await fetch(`/api/tweets/${id}/like`, { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to like tweet:', e);
+    }
     setResults(prev => ({
       ...prev,
       tweets: prev.tweets.map(t => {
@@ -590,7 +780,11 @@ function SearchView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete,
   };
 
   const handleRetweet = async (id: number) => {
-    await fetch(`/api/tweets/${id}/retweet`, { method: 'POST' });
+    try {
+      await fetch(`/api/tweets/${id}/retweet`, { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to retweet:', e);
+    }
     setResults(prev => ({
       ...prev,
       tweets: prev.tweets.map(t => {
@@ -656,29 +850,52 @@ function SearchView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete,
   );
 }
 
-function ProfileView({ username, isOwn, setView, onReply, onViewTweet, onDelete, currentUserId, refreshKey }: { username: string, isOwn?: boolean, setView?: any, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, onDelete?: (id: number) => void, currentUserId?: number, refreshKey?: number }) {
+function ProfileView({ username, isOwn, setView, onReply, onViewTweet, onDelete, currentUserId, refreshKey, onImageClick }: { username: string, isOwn?: boolean, setView?: any, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, onDelete?: (id: number) => void, currentUserId?: number, refreshKey?: number, onImageClick?: (images: string[], index: number) => void }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [tweets, setTweets] = useState<Tweet[]>([]);
 
   useEffect(() => {
-    fetch(`/api/users/${username}`).then(res => res.json()).then(setProfile);
-    fetch(`/api/tweets/user/${username}`).then(res => res.json()).then(setTweets);
+    const loadProfileData = async () => {
+      try {
+        const [profileRes, tweetsRes] = await Promise.all([
+          fetch(`/api/users/${username}`),
+          fetch(`/api/tweets/user/${username}`)
+        ]);
+        
+        const profileData = profileRes.ok ? await profileRes.json() : null;
+        const tweetsData = tweetsRes.ok ? await tweetsRes.json() : [];
+        
+        setProfile(profileData);
+        setTweets(Array.isArray(tweetsData) ? tweetsData : []);
+      } catch (e) {
+        console.error('Failed to load profile data:', e);
+      }
+    };
+    loadProfileData();
   }, [username, refreshKey]);
 
   const handleFollow = async () => {
     if (!profile) return;
-    const res = await fetch(`/api/users/${profile.id}/follow`, { method: 'POST' });
-    if (res.ok) {
-      setProfile(prev => prev ? {
-        ...prev,
-        is_following: !prev.is_following,
-        followers_count: prev.is_following ? prev.followers_count - 1 : prev.followers_count + 1
-      } : null);
+    try {
+      const res = await fetch(`/api/users/${profile.id}/follow`, { method: 'POST' });
+      if (res.ok) {
+        setProfile(prev => prev ? {
+          ...prev,
+          is_following: !prev.is_following,
+          followers_count: prev.is_following ? prev.followers_count - 1 : prev.followers_count + 1
+        } : null);
+      }
+    } catch (e) {
+      console.error('Failed to follow user:', e);
     }
   };
 
   const handleLike = async (id: number) => {
-    await fetch(`/api/tweets/${id}/like`, { method: 'POST' });
+    try {
+      await fetch(`/api/tweets/${id}/like`, { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to like tweet:', e);
+    }
     setTweets(prev => prev.map(t => {
       const targetId = t.retweet_id || t.id;
       if (targetId === id) {
@@ -693,7 +910,11 @@ function ProfileView({ username, isOwn, setView, onReply, onViewTweet, onDelete,
   };
 
   const handleRetweet = async (id: number) => {
-    await fetch(`/api/tweets/${id}/retweet`, { method: 'POST' });
+    try {
+      await fetch(`/api/tweets/${id}/retweet`, { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to retweet:', e);
+    }
     setTweets(prev => prev.map(t => {
       const targetId = t.retweet_id || t.id;
       if (targetId === id) {
@@ -757,12 +978,19 @@ function UserListView({ username, type, onNavigate, onBack }: { username: string
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/users/${username}/${type}`)
-      .then(res => res.json())
-      .then(data => {
-        setUsers(data);
+    const fetchUsers = async () => {
+      try {
+        const res = await fetch(`/api/users/${username}/${type}`);
+        const data = res.ok ? await res.json() : [];
+        setUsers(Array.isArray(data) ? data : []);
+      } catch (e) {
+        console.error(`Failed to fetch ${type}:`, e);
+        setUsers([]);
+      } finally {
         setLoading(false);
-      });
+      }
+    };
+    fetchUsers();
   }, [username, type]);
 
   return (
@@ -805,22 +1033,33 @@ function UserListView({ username, type, onNavigate, onBack }: { username: string
   );
 }
 
-function TweetDetailView({ tweetId, onNavigate, onReply, onViewTweet, onBack, currentUserId, onDelete, refreshKey }: { tweetId: number, onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, onBack: () => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number }) {
+function TweetDetailView({ tweetId, onNavigate, onReply, onViewTweet, onBack, currentUserId, onDelete, refreshKey, onImageClick }: { tweetId: number, onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, onBack: () => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number, onImageClick?: (images: string[], index: number) => void }) {
   const [data, setData] = useState<{ tweet: Tweet, replies: Tweet[], parent?: Tweet } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
-    fetch(`/api/tweets/${tweetId}`)
-      .then(res => res.json())
-      .then(d => {
+    const loadTweetDetail = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/tweets/${tweetId}`);
+        const d = res.ok ? await res.json() : null;
         setData(d);
+      } catch (e) {
+        console.error('Failed to load tweet detail:', e);
+        setData(null);
+      } finally {
         setLoading(false);
-      });
+      }
+    };
+    loadTweetDetail();
   }, [tweetId, refreshKey]);
 
   const handleLike = async (id: number) => {
-    await fetch(`/api/tweets/${id}/like`, { method: 'POST' });
+    try {
+      await fetch(`/api/tweets/${id}/like`, { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to like tweet:', e);
+    }
     setData(prev => {
       if (!prev) return null;
       const updateTweet = (t: Tweet) => {
@@ -838,7 +1077,11 @@ function TweetDetailView({ tweetId, onNavigate, onReply, onViewTweet, onBack, cu
   };
 
   const handleRetweet = async (id: number) => {
-    await fetch(`/api/tweets/${id}/retweet`, { method: 'POST' });
+    try {
+      await fetch(`/api/tweets/${id}/retweet`, { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to retweet:', e);
+    }
     setData(prev => {
       if (!prev) return null;
       const updateTweet = (t: Tweet) => {
@@ -912,6 +1155,12 @@ function TweetDetailView({ tweetId, onNavigate, onReply, onViewTweet, onBack, cu
           </div>
         </div>
         <p className="text-xl leading-relaxed mb-4 whitespace-pre-wrap">{data.tweet.content}</p>
+        
+        <ImageGrid 
+          images={data.tweet.images || []} 
+          onImageClick={(index) => onImageClick?.(data.tweet.images || [], index)} 
+        />
+
         <div className="text-sm text-black/40 dark:text-white/40 mb-4 pb-4 border-b border-black/5 dark:border-white/5">
           {new Date(data.tweet.created_at).toLocaleTimeString()} · {new Date(data.tweet.created_at).toLocaleDateString()}
         </div>
@@ -946,49 +1195,160 @@ function TweetDetailView({ tweetId, onNavigate, onReply, onViewTweet, onBack, cu
   );
 }
 
+function CropperModal({ image, onCropComplete, onCancel }: { image: string, onCropComplete: (croppedImage: string, croppedImageSmall: string) => void, onCancel: () => void }) {
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
+
+  const handleCrop = async () => {
+    try {
+      const canvas = await getCroppedImgCanvas(image, croppedAreaPixels);
+      if (!canvas) return;
+      
+      // Standard version
+      const standardBlob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.85));
+      const standardFile = new File([standardBlob], 'avatar.jpg', { type: 'image/jpeg' });
+      const compressedStandard = await compressImage(standardFile, { maxWidthOrHeight: 400, maxSizeMB: 0.1 });
+      const standardUrl = await fileToBase64(compressedStandard);
+
+      // Small version
+      const smallBlob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.6));
+      const smallFile = new File([smallBlob], 'avatar_small.jpg', { type: 'image/jpeg' });
+      const compressedSmall = await compressImage(smallFile, { maxWidthOrHeight: 100, maxSizeMB: 0.02 });
+      const smallUrl = await fileToBase64(compressedSmall);
+
+      onCropComplete(standardUrl, smallUrl);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/80 z-[110] flex flex-col">
+      <div className="flex justify-between p-4 text-white z-10">
+        <button onClick={onCancel} className="p-2 rounded-full hover:bg-white/10"><X size={24} /></button>
+        <button onClick={handleCrop} className="px-6 py-2 bg-white text-black font-bold rounded-full">Apply</button>
+      </div>
+      <div className="relative flex-1">
+        <Cropper
+          image={image}
+          crop={crop}
+          zoom={zoom}
+          aspect={1}
+          onCropChange={setCrop}
+          onZoomChange={setZoom}
+          onCropComplete={(_, pixels) => setCroppedAreaPixels(pixels)}
+        />
+      </div>
+      <div className="p-8 bg-black/50 backdrop-blur-md">
+        <input 
+          type="range" 
+          min={1} 
+          max={3} 
+          step={0.1} 
+          value={zoom} 
+          onChange={(e) => setZoom(Number(e.target.value))}
+          className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-white"
+        />
+      </div>
+    </div>
+  );
+}
+
 function SettingsView({ user, setView, onUpdateUser }: any) {
   const { toggleTheme } = useTheme();
   const [newPass, setNewPass] = useState('');
   const [bio, setBio] = useState(user.bio || '');
   const [invites, setInvites] = useState<any[]>([]);
   const [quota, setQuota] = useState(user.invite_quota);
+  const [avatar, setAvatar] = useState(user.avatar || '');
+  const [avatarSmall, setAvatarSmall] = useState(user.avatar_small || '');
+  const [croppingImage, setCroppingImage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetch('/api/invites').then(res => res.json()).then(setInvites);
-    fetch('/api/auth/me').then(res => res.json()).then(d => {
-      setQuota(d.invite_quota);
-      setBio(d.bio || '');
-    });
+    const loadSettingsData = async () => {
+      try {
+        const [invitesRes, meRes] = await Promise.all([
+          fetch('/api/invites'),
+          fetch('/api/auth/me')
+        ]);
+        
+        const invitesData = invitesRes.ok ? await invitesRes.json() : [];
+        setInvites(invitesData);
+        
+        const meData = meRes.ok ? await meRes.json() : null;
+        if (meData) {
+          setQuota(meData.invite_quota);
+          setBio(meData.bio || '');
+          setAvatar(meData.avatar || '');
+          setAvatarSmall(meData.avatar_small || '');
+        }
+      } catch (e) {
+        console.error('Failed to load settings data:', e);
+      }
+    };
+    loadSettingsData();
   }, []);
 
+  const handleAvatarSelect = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => setCroppingImage(reader.result as string);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleCropComplete = (standard: string, small: string) => {
+    setAvatar(standard);
+    setAvatarSmall(small);
+    setCroppingImage(null);
+  };
+
   const generateInvite = async () => {
-    const res = await fetch('/api/invites/generate', { method: 'POST' });
-    if (res.ok) {
-      const data = await res.json();
-      setInvites(prev => [...prev, { code: data.code, used_by_id: null }]);
-      if (user.tier === 1) setQuota(prev => prev - 1);
+    try {
+      const res = await fetch('/api/invites/generate', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setInvites(prev => [...prev, { code: data.code, used_by_id: null }]);
+        if (user.tier === 1) setQuota(prev => prev - 1);
+      }
+    } catch (e) {
+      console.error('Failed to generate invite:', e);
     }
   };
 
   const updatePassword = async () => {
-    await fetch('/api/settings/password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newPassword: newPass })
-    });
-    setNewPass('');
-    alert('Password updated');
+    try {
+      await fetch('/api/settings/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPassword: newPass })
+      });
+      setNewPass('');
+      alert('Password updated');
+    } catch (e) {
+      console.error('Failed to update password:', e);
+    }
   };
 
-  const updateBio = async () => {
-    const res = await fetch('/api/settings/bio', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bio })
-    });
-    if (res.ok) {
-      onUpdateUser({ ...user, bio });
-      alert('Bio updated');
+  const updateProfile = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/settings/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bio, avatar, avatar_small: avatarSmall })
+      });
+      if (res.ok) {
+        onUpdateUser({ ...user, bio, avatar, avatar_small: avatarSmall });
+        alert('Profile updated');
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1001,17 +1361,49 @@ function SettingsView({ user, setView, onUpdateUser }: any) {
         <h1 className="text-2xl font-black">Settings</h1>
       </header>
 
-      <section className="space-y-4">
+      {croppingImage && (
+        <CropperModal 
+          image={croppingImage} 
+          onCropComplete={handleCropComplete} 
+          onCancel={() => setCroppingImage(null)} 
+        />
+      )}
+
+      <section className="space-y-6">
         <h2 className="text-xs font-bold uppercase tracking-widest text-black/40 dark:text-white/40">Profile</h2>
-        <div className="space-y-2">
-          <label className="text-sm font-medium px-1">Biography</label>
-          <textarea 
-            className="w-full px-4 py-3 rounded-xl bg-black/5 dark:bg-white/5 border-none focus:ring-2 focus:ring-black dark:focus:ring-white outline-none transition-all resize-none h-24"
-            placeholder="Tell the world about yourself..."
-            value={bio}
-            onChange={(e) => setBio(e.target.value)}
-          />
-          <Button onClick={updateBio} className="w-full">Update Bio</Button>
+        
+        <div className="flex flex-col items-center gap-4">
+          <div className="relative group">
+            <div className="w-24 h-24 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden border-4 border-white dark:border-black shadow-xl">
+              {avatar ? (
+                <img src={avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-black/20 dark:text-white/20">
+                  <Camera size={32} />
+                </div>
+              )}
+            </div>
+            <label className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-full cursor-pointer">
+              <Camera className="text-white" size={24} />
+              <input type="file" accept="image/*" className="hidden" onChange={handleAvatarSelect} />
+            </label>
+          </div>
+          <p className="text-xs text-black/40 dark:text-white/40">Tap to change profile picture</p>
+        </div>
+
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium px-1">Biography</label>
+            <textarea 
+              className="w-full px-4 py-3 rounded-xl bg-black/5 dark:bg-white/5 border-none focus:ring-2 focus:ring-black dark:focus:ring-white outline-none transition-all resize-none h-24"
+              placeholder="Tell the world about yourself..."
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+            />
+          </div>
+          <Button onClick={updateProfile} className="w-full" disabled={loading}>
+            {loading ? 'Updating...' : 'Update Profile'}
+          </Button>
         </div>
       </section>
 
@@ -1094,10 +1486,33 @@ function ConfirmModal({ title, message, onConfirm, onCancel, confirmText = "Dele
 
 function ComposeModal({ onClose, replyTo, onTweeted }: { onClose: () => void, replyTo?: Tweet | null, onTweeted: () => void }) {
   const [content, setContent] = useState('');
+  const [images, setImages] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
+  const handleImageSelect = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const remainingSlots = 4 - images.length;
+    const filesToProcess = files.slice(0, remainingSlots);
+
+    for (const file of filesToProcess) {
+      try {
+        const compressed = await compressImage(file as File, { maxWidthOrHeight: 1200, maxSizeMB: 0.5 });
+        const base64 = await fileToBase64(compressed);
+        setImages(prev => [...prev, base64]);
+      } catch (err) {
+        console.error('Compression failed', err);
+      }
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setImages(prev => prev.filter((_, i) => i !== index));
+  };
+
   const handleSubmit = async () => {
-    if (!content.trim() || loading) return;
+    if ((!content.trim() && images.length === 0) || loading) return;
     setLoading(true);
     try {
       const res = await fetch('/api/tweets', {
@@ -1105,7 +1520,8 @@ function ComposeModal({ onClose, replyTo, onTweeted }: { onClose: () => void, re
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           content,
-          parent_id: replyTo?.id
+          parent_id: replyTo?.id,
+          images
         })
       });
       if (res.ok) {
@@ -1130,7 +1546,9 @@ function ComposeModal({ onClose, replyTo, onTweeted }: { onClose: () => void, re
           <button onClick={onClose} className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5">
             <X size={24} />
           </button>
-          <Button onClick={handleSubmit} disabled={!content.trim()}>{replyTo ? 'Reply' : 'Post'}</Button>
+          <Button onClick={handleSubmit} disabled={(!content.trim() && images.length === 0) || loading}>
+            {loading ? 'Posting...' : (replyTo ? 'Reply' : 'Post')}
+          </Button>
         </div>
         
         {replyTo && (
@@ -1142,10 +1560,43 @@ function ComposeModal({ onClose, replyTo, onTweeted }: { onClose: () => void, re
         <textarea 
           autoFocus
           placeholder={replyTo ? "Post your reply" : "What's happening?"}
-          className="w-full h-40 bg-transparent border-none outline-none text-xl resize-none"
+          className="w-full h-32 bg-transparent border-none outline-none text-xl resize-none"
           value={content}
           onChange={(e) => setContent(e.target.value)}
         />
+
+        {images.length > 0 && (
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            {images.map((img, i) => (
+              <div key={i} className="relative aspect-video rounded-2xl overflow-hidden bg-black/5 dark:bg-white/5">
+                <img src={img} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                <button 
+                  onClick={() => removeImage(i)}
+                  className="absolute top-2 right-2 p-1.5 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-4 pt-4 border-t border-black/5 dark:border-white/5">
+          <label className={cn(
+            "p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer transition-colors",
+            images.length >= 4 && "opacity-50 cursor-not-allowed"
+          )}>
+            <ImageIcon size={20} className="text-blue-500" />
+            <input 
+              type="file" 
+              accept="image/*" 
+              multiple 
+              className="hidden" 
+              onChange={handleImageSelect}
+              disabled={images.length >= 4}
+            />
+          </label>
+        </div>
       </motion.div>
     </div>
   );
@@ -1154,23 +1605,49 @@ function ComposeModal({ onClose, replyTo, onTweeted }: { onClose: () => void, re
 function AuthPage({ mode, setMode, onAuth }: any) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [repeatPassword, setRepeatPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
   const [error, setError] = useState('');
+
+  const validatePassword = (pass: string) => {
+    const minLength = 8;
+    const hasNumber = /\d/.test(pass);
+    const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(pass);
+    return pass.length >= minLength && hasNumber && hasSpecialChar;
+  };
 
   const handleSubmit = async (e: any) => {
     e.preventDefault();
     setError('');
+
+    if (mode === 'register') {
+      if (password !== repeatPassword) {
+        setError('Passwords do not match');
+        return;
+      }
+      if (!validatePassword(password)) {
+        setError('Password must be at least 8 characters long and include at least one number and one special character.');
+        return;
+      }
+    }
+
     const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password, inviteCode })
-    });
-    const data = await res.json();
-    if (res.ok) {
-      onAuth(data.user);
-    } else {
-      setError(data.error);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, inviteCode })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        onAuth(data.user);
+      } else {
+        setError(data.error);
+      }
+    } catch (e) {
+      setError('Network error. Please try again.');
+      console.error('Auth failed:', e);
     }
   };
 
@@ -1185,16 +1662,47 @@ function AuthPage({ mode, setMode, onAuth }: any) {
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && <div className="p-4 bg-red-500/10 text-red-500 text-sm rounded-2xl text-center font-medium">{error}</div>}
           <Input placeholder="Username" value={username} onChange={(e: any) => setUsername(e.target.value)} />
-          <Input type="password" placeholder="Password" value={password} onChange={(e: any) => setPassword(e.target.value)} />
+          
+          <div className="relative">
+            <Input 
+              type={showPassword ? "text" : "password"} 
+              placeholder="Password" 
+              value={password} 
+              onChange={(e: any) => setPassword(e.target.value)} 
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-colors"
+            >
+              {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+            </button>
+          </div>
+
           {mode === 'register' && (
-            <Input placeholder="Invite Code" value={inviteCode} onChange={(e: any) => setInviteCode(e.target.value)} />
+            <>
+              <div className="relative">
+                <Input 
+                  type={showPassword ? "text" : "password"} 
+                  placeholder="Repeat Password" 
+                  value={repeatPassword} 
+                  onChange={(e: any) => setRepeatPassword(e.target.value)} 
+                />
+              </div>
+              <Input placeholder="Invite Code" value={inviteCode} onChange={(e: any) => setInviteCode(e.target.value)} />
+            </>
           )}
           <Button className="w-full py-4 text-lg">{mode === 'login' ? 'Login' : 'Join Jeak'}</Button>
         </form>
 
         <div className="text-center">
           <button 
-            onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
+            onClick={() => {
+              setMode(mode === 'login' ? 'register' : 'login');
+              setError('');
+              setPassword('');
+              setRepeatPassword('');
+            }}
             className="text-sm font-bold text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-colors"
           >
             {mode === 'login' ? "Don't have an invite? Join waitlist" : "Already have an account? Login"}
