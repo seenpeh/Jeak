@@ -1,4 +1,4 @@
-import { useState, useEffect, ChangeEvent, FormEvent } from 'react';
+import { useState, useEffect, ChangeEvent, FormEvent, useRef, useCallback } from 'react';
 import { 
   Home, 
   Compass, 
@@ -24,7 +24,15 @@ import {
   Eye,
   EyeOff,
   Gift,
-  Lock
+  Lock,
+  Download,
+  MessageSquare,
+  Send,
+  MoreVertical,
+  Shield,
+  Ban,
+  Check,
+  CheckCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Cropper from 'react-easy-crop';
@@ -35,6 +43,89 @@ import { ThemeProvider, useTheme } from './ThemeContext';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+// --- Utils ---
+function formatRelativeTime(dateString: string) {
+  const now = new Date();
+  // Add 3:30 hours offset as requested
+  const date = new Date(new Date(dateString).getTime() + (3.5 * 60 * 60 * 1000));
+  const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+  if (diffInSeconds < 60) return 'just now';
+  const diffInMinutes = Math.floor(diffInSeconds / 60);
+  if (diffInMinutes < 60) return `${diffInMinutes} minutes ago`;
+  const diffInHours = Math.floor(diffInMinutes / 60);
+  if (diffInHours < 24) return `${diffInHours} hours ago`;
+  const diffInDays = Math.floor(diffInHours / 24);
+  if (diffInDays < 30) return `${diffInDays} days ago`;
+  const diffInMonths = Math.floor(diffInDays / 30);
+  if (diffInMonths < 12) return `${diffInMonths} months ago`;
+  const diffInYears = Math.floor(diffInMonths / 12);
+  return `${diffInYears} years ago`;
+}
+
+function formatTehranTime(dateString: string) {
+  // Add 3:30 hours offset as requested
+  const date = new Date(new Date(dateString).getTime() + (3.5 * 60 * 60 * 1000));
+  return new Intl.DateTimeFormat('en-GB', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Asia/Tehran',
+    hour12: false
+  }).format(date);
+}
+
+// --- Encryption Utils ---
+async function deriveKey(userId1: number, userId2: number) {
+  const ids = [userId1, userId2].sort((a, b) => a - b);
+  const seed = `jeak-secure-chat-${ids[0]}-${ids[1]}`;
+  const encoder = new TextEncoder();
+  const data = encoder.encode(seed);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return await crypto.subtle.importKey(
+    'raw',
+    hash,
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptMessage(text: string, key: CryptoKey) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(text);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    data
+  );
+  const combined = new Uint8Array(iv.length + encrypted.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(encrypted), iv.length);
+  return btoa(String.fromCharCode(...combined));
+}
+
+async function decryptMessage(encryptedBase64: string, key: CryptoKey) {
+  try {
+    const combined = new Uint8Array(atob(encryptedBase64).split('').map(c => c.charCodeAt(0)));
+    const iv = combined.slice(0, 12);
+    const data = combined.slice(12);
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv },
+      key,
+      data
+    );
+    const decoder = new TextDecoder();
+    return decoder.decode(decrypted);
+  } catch (e) {
+    return "[Encrypted Message]";
+  }
 }
 
 // --- Types ---
@@ -122,6 +213,26 @@ const Lightbox = ({ images, initialIndex, onClose }: { images: string[], initial
     setIndex(prev => (prev < images.length - 1 ? prev + 1 : 0));
   };
 
+  const handleSave = async (e: any) => {
+    e.stopPropagation();
+    try {
+      const response = await fetch(images[index]);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `jeak-image-${Date.now()}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to save image:', err);
+      // Fallback: open in new tab if fetch fails (e.g. CORS)
+      window.open(images[index], '_blank');
+    }
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -130,12 +241,21 @@ const Lightbox = ({ images, initialIndex, onClose }: { images: string[], initial
       className="fixed inset-0 z-[100] bg-black flex items-center justify-center"
       onClick={onClose}
     >
-      <button 
-        className="absolute top-6 right-6 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white z-[101]"
-        onClick={onClose}
-      >
-        <X size={24} />
-      </button>
+      <div className="absolute top-6 right-6 flex gap-2 z-[101]">
+        <button 
+          className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center gap-2 px-4"
+          onClick={handleSave}
+        >
+          <Download size={20} />
+          <span className="text-sm font-bold">Save</span>
+        </button>
+        <button 
+          className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white"
+          onClick={onClose}
+        >
+          <X size={24} />
+        </button>
+      </div>
 
       {images.length > 1 && (
         <>
@@ -216,6 +336,7 @@ interface TweetCardProps {
 }
 
 const TweetCard = ({ tweet, onLike, onRetweet, onReply, onNavigate, onViewTweet, onDelete, currentUserId, onImageClick }: TweetCardProps & { onImageClick?: (images: string[], index: number) => void }) => {
+  const [showExactDate, setShowExactDate] = useState(false);
   const isRetweet = !!tweet.retweet_id;
   const displayContent = isRetweet ? tweet.original_content : tweet.content;
   const displayUsername = isRetweet ? tweet.original_username : tweet.username;
@@ -258,9 +379,17 @@ const TweetCard = ({ tweet, onLike, onRetweet, onReply, onNavigate, onViewTweet,
                 {displayUsername}
               </button>
               {displayTier === 0 && <CheckCircle2 size={14} className="text-blue-500 flex-shrink-0" />}
-              <span className="text-xs text-black/40 dark:text-white/40 truncate">
-                {new Date(displayCreatedAt || '').toLocaleDateString()}
-              </span>
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowExactDate(!showExactDate);
+                }}
+                className="text-xs text-black/40 dark:text-white/40 truncate hover:underline"
+              >
+                {showExactDate 
+                  ? formatTehranTime(displayCreatedAt || '') 
+                  : formatRelativeTime(displayCreatedAt || '')}
+              </button>
             </div>
             {currentUserId === tweet.user_id && !isRetweet && (
               <button 
@@ -330,9 +459,10 @@ const TweetCard = ({ tweet, onLike, onRetweet, onReply, onNavigate, onViewTweet,
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'following' | 'explore' | 'notifications' | 'search' | 'profile' | 'settings' | 'tweet-detail' | 'follower-list' | 'following-list'>('following');
-  const [previousView, setPreviousView] = useState<'following' | 'explore' | 'notifications' | 'search' | 'profile' | 'settings' | 'follower-list' | 'following-list'>('following');
+  const [view, setView] = useState<'home' | 'notifications' | 'search' | 'messages' | 'profile' | 'settings' | 'tweet-detail' | 'follower-list' | 'following-list' | 'chat-room'>('home');
+  const [previousView, setPreviousView] = useState<'home' | 'notifications' | 'search' | 'messages' | 'profile' | 'settings' | 'follower-list' | 'following-list' | 'chat-room'>('home');
   const [targetUsername, setTargetUsername] = useState<string | null>(null);
+  const [targetUserId, setTargetUserId] = useState<number | null>(null);
   const [selectedTweetId, setSelectedTweetId] = useState<number | null>(null);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<Tweet | null>(null);
@@ -400,6 +530,12 @@ export default function App() {
     setView('profile');
   };
 
+  const navigateToChat = (userId: number) => {
+    setPreviousView(view as any);
+    setTargetUserId(userId);
+    setView('chat-room');
+  };
+
   const navigateToTweet = (id: number) => {
     setPreviousView(view as any);
     setSelectedTweetId(id);
@@ -451,7 +587,7 @@ export default function App() {
         )}
       </AnimatePresence>
       <div className="min-h-screen bg-white dark:bg-black text-black dark:text-white selection:bg-black selection:text-white dark:selection:bg-white dark:selection:text-black">
-        <div className="max-w-2xl mx-auto pb-20 md:pb-0 md:pl-64">
+        <div className={cn("max-w-2xl mx-auto md:pl-64", view !== 'chat-room' && "pb-20 md:pb-0")}>
           {/* Sidebar (Desktop) */}
           <nav className="hidden md:flex fixed left-0 top-0 h-screen w-64 border-r border-black/5 dark:border-white/5 flex-col p-6 gap-2">
             <div className="text-2xl font-black mb-8 px-4">JEAK</div>
@@ -459,7 +595,7 @@ export default function App() {
           </nav>
 
           {/* Main Content */}
-          <main className="min-h-screen">
+          <main className={cn("min-h-screen", view === 'chat-room' && "h-screen flex flex-col overflow-hidden")}>
             <AnimatePresence mode="wait">
               <motion.div
                 key={view + (targetUsername || '') + (selectedTweetId || '') + refreshKey}
@@ -467,12 +603,14 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
+                className={cn(view === 'chat-room' && "h-full flex flex-col")}
               >
-                {view === 'following' && <FeedView type="following" onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
-                {view === 'explore' && <FeedView type="explore" onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
+                {view === 'home' && <HomeView onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} />}
                 {view === 'notifications' && <NotificationsView onNavigate={navigateToProfile} onViewTweet={navigateToTweet} refreshKey={refreshKey} />}
-                {view === 'search' && <SearchView onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
-                {view === 'profile' && <ProfileView username={targetUsername || user.username} isOwn={!targetUsername || targetUsername === user.username} setView={setView} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} onDelete={setConfirmDelete} currentUserId={user.id} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
+                {view === 'search' && <SearchView onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} />}
+                {view === 'messages' && <MessagesView onNavigateChat={navigateToChat} />}
+                {view === 'chat-room' && <ChatRoomView otherUserId={targetUserId!} currentUserId={user.id} onBack={() => setView('messages')} onNavigateProfile={navigateToProfile} onImageClick={(images, index) => setLightbox({ images, index })} />}
+                {view === 'profile' && <ProfileView username={targetUsername || user.username} isOwn={!targetUsername || targetUsername === user.username} setView={setView} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} onDelete={setConfirmDelete} currentUserId={user.id} refreshKey={refreshKey} onMessage={navigateToChat} />}
                 {view === 'settings' && <SettingsView user={user} setView={setView} onUpdateUser={setUser} onNewInvite={setNewInviteCode} onLogout={handleLogout} />}
                 {view === 'tweet-detail' && <TweetDetailView tweetId={selectedTweetId!} onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} onBack={() => setView(previousView)} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
                 {view === 'follower-list' && <UserListView username={targetUsername!} type="followers" onNavigate={navigateToProfile} onBack={() => setView('profile')} />}
@@ -487,15 +625,17 @@ export default function App() {
           </nav>
 
           {/* Floating Action Button */}
-          <button 
-            onClick={() => {
-              setReplyTo(null);
-              setIsComposeOpen(true);
-            }}
-            className="fixed bottom-24 right-6 md:bottom-8 md:right-8 w-14 h-14 bg-black dark:bg-white text-white dark:text-black rounded-full shadow-2xl flex items-center justify-center active:scale-90 transition-transform z-50"
-          >
-            <Plus size={24} />
-          </button>
+          {!['search', 'chat-room', 'messages'].includes(view) && (
+            <button 
+              onClick={() => {
+                setReplyTo(null);
+                setIsComposeOpen(true);
+              }}
+              className="fixed bottom-24 right-6 md:bottom-8 md:right-8 w-14 h-14 bg-black dark:bg-white text-white dark:text-black rounded-full shadow-2xl flex items-center justify-center active:scale-90 transition-transform z-50"
+            >
+              <Plus size={24} />
+            </button>
+          )}
 
           {/* Compose Modal */}
           <AnimatePresence>
@@ -529,10 +669,10 @@ export default function App() {
 
 function NavItems({ active, setView, mobile, unreadCount }: any) {
   const items = [
-    { id: 'following', icon: Home, label: 'Feed' },
-    { id: 'explore', icon: Compass, label: 'Explore' },
+    { id: 'home', icon: Home, label: 'Home' },
     { id: 'notifications', icon: Bell, label: 'Notifications', badge: unreadCount },
     { id: 'search', icon: Search, label: 'Search' },
+    { id: 'messages', icon: MessageSquare, label: 'Messages' },
     { id: 'profile', icon: User, label: 'Profile' },
   ];
 
@@ -565,27 +705,108 @@ function NavItems({ active, setView, mobile, unreadCount }: any) {
   );
 }
 
-function FeedView({ type, onNavigate, onReply, onViewTweet, currentUserId, onDelete, refreshKey, onImageClick }: { type: 'following' | 'explore', onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number, onImageClick?: (images: string[], index: number) => void }) {
+function HomeView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete, refreshKey }: { onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number }) {
+  const [activeTab, setActiveTab] = useState<'following' | 'explore'>('following');
+
+  return (
+    <div>
+      <header className="sticky top-0 bg-white/80 dark:bg-black/80 backdrop-blur-xl z-30 border-b border-black/5 dark:border-white/5">
+        <div className="flex">
+          <button 
+            onClick={() => setActiveTab('following')}
+            className={cn(
+              "flex-1 py-4 text-sm font-bold transition-colors relative",
+              activeTab === 'following' ? "text-black dark:text-white" : "text-black/40 dark:text-white/40 hover:bg-black/5 dark:hover:bg-white/5"
+            )}
+          >
+            Following
+            {activeTab === 'following' && (
+              <motion.div layoutId="home-tab" className="absolute bottom-0 left-1/2 -translate-x-1/2 w-14 h-1 bg-black dark:bg-white rounded-full" />
+            )}
+          </button>
+          <button 
+            onClick={() => setActiveTab('explore')}
+            className={cn(
+              "flex-1 py-4 text-sm font-bold transition-colors relative",
+              activeTab === 'explore' ? "text-black dark:text-white" : "text-black/40 dark:text-white/40 hover:bg-black/5 dark:hover:bg-white/5"
+            )}
+          >
+            Explore
+            {activeTab === 'explore' && (
+              <motion.div layoutId="home-tab" className="absolute bottom-0 left-1/2 -translate-x-1/2 w-14 h-1 bg-black dark:bg-white rounded-full" />
+            )}
+          </button>
+        </div>
+      </header>
+      <FeedView 
+        type={activeTab} 
+        onNavigate={onNavigate} 
+        onReply={onReply} 
+        onViewTweet={onViewTweet} 
+        currentUserId={currentUserId} 
+        onDelete={onDelete} 
+        refreshKey={refreshKey} 
+        hideHeader
+      />
+    </div>
+  );
+}
+
+function FeedView({ type, onNavigate, onReply, onViewTweet, currentUserId, onDelete, refreshKey, hideHeader }: { type: 'following' | 'explore', onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number, hideHeader?: boolean }) {
   const [tweets, setTweets] = useState<Tweet[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const limit = 20;
 
-  const fetchTweets = async () => {
+  const fetchTweets = async (isInitial = false) => {
+    if (!isInitial && (loadingMore || !hasMore)) return;
+    
+    if (isInitial) {
+      setLoading(true);
+      setOffset(0);
+    } else {
+      setLoadingMore(true);
+    }
+
     try {
-      const res = await fetch(`/api/tweets/${type}`);
+      const currentOffset = isInitial ? 0 : offset;
+      const res = await fetch(`/api/tweets/${type}?limit=${limit}&offset=${currentOffset}`);
       if (res.ok) {
         const data = await res.json();
-        setTweets(Array.isArray(data) ? data : []);
+        const newTweets = Array.isArray(data) ? data : [];
+        if (isInitial) {
+          setTweets(newTweets);
+        } else {
+          setTweets(prev => [...prev, ...newTweets]);
+        }
+        setHasMore(newTweets.length === limit);
+        setOffset(currentOffset + newTweets.length);
       }
     } catch (e) {
       console.error('Failed to fetch tweets:', e);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
   useEffect(() => {
-    fetchTweets();
+    fetchTweets(true);
   }, [type, refreshKey]);
+
+  const observer = useRef<IntersectionObserver | null>(null);
+  const lastTweetRef = useCallback((node: HTMLDivElement | null) => {
+    if (loading || loadingMore) return;
+    if (observer.current) observer.current.disconnect();
+    observer.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore) {
+        fetchTweets();
+      }
+    });
+    if (node) observer.current.observe(node);
+  }, [loading, loadingMore, hasMore, offset]);
 
   const handleLike = async (id: number) => {
     try {
@@ -627,9 +848,11 @@ function FeedView({ type, onNavigate, onReply, onViewTweet, currentUserId, onDel
 
   return (
     <div className="divide-y divide-black/5 dark:border-white/5">
-      <header className="sticky top-0 bg-white/80 dark:bg-black/80 backdrop-blur-xl z-30 p-4 border-b border-black/5 dark:border-white/5">
-        <h1 className="text-xl font-black capitalize">{type}</h1>
-      </header>
+      {!hideHeader && (
+        <header className="sticky top-0 bg-white/80 dark:bg-black/80 backdrop-blur-xl z-30 p-4 border-b border-black/5 dark:border-white/5">
+          <h1 className="text-xl font-black capitalize">{type}</h1>
+        </header>
+      )}
       {loading ? (
         <div className="p-8 text-center text-black/40 dark:text-white/40">Loading...</div>
       ) : tweets.length === 0 ? (
@@ -638,7 +861,21 @@ function FeedView({ type, onNavigate, onReply, onViewTweet, currentUserId, onDel
           <p className="text-sm">Start following people to see their posts</p>
         </div>
       ) : (
-        tweets.map(tweet => <TweetCard key={tweet.id} tweet={tweet} onLike={handleLike} onRetweet={handleRetweet} onReply={onReply} onNavigate={onNavigate} onViewTweet={onViewTweet} currentUserId={currentUserId} onDelete={onDelete} />)
+        tweets.map((tweet, index) => (
+          <div key={tweet.id} ref={index === tweets.length - 1 ? lastTweetRef : null}>
+            <TweetCard 
+              tweet={tweet} 
+              onLike={handleLike} 
+              onRetweet={handleRetweet} 
+              onReply={onReply} 
+              onNavigate={onNavigate} 
+              onViewTweet={onViewTweet} 
+              currentUserId={currentUserId} 
+              onDelete={onDelete} 
+              onImageClick={() => onViewTweet(tweet.retweet_id || tweet.id)}
+            />
+          </div>
+        ))
       )}
     </div>
   );
@@ -769,27 +1006,122 @@ function NotificationsView({ onNavigate, onViewTweet, refreshKey }: { onNavigate
   );
 }
 
-function SearchView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete, refreshKey, onImageClick }: { onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number, onImageClick?: (images: string[], index: number) => void }) {
+function SearchView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete, refreshKey }: { onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number }) {
   const [query, setQuery] = useState('');
+  const [hasSearched, setHasSearched] = useState(false);
   const [results, setResults] = useState<{ users: any[], tweets: Tweet[] }>({ users: [], tweets: [] });
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const limit = 20;
 
-  const handleSearch = async (val: string) => {
-    setQuery(val);
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => {
+    const saved = localStorage.getItem('searchHistory');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [recentUsers, setRecentUsers] = useState<any[]>(() => {
+    const saved = localStorage.getItem('recentUsers');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const addToHistory = (q: string) => {
+    if (!q.trim()) return;
+    setSearchHistory(prev => {
+      const filtered = prev.filter(item => item !== q);
+      const updated = [q, ...filtered].slice(0, 10);
+      localStorage.setItem('searchHistory', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const removeFromHistory = (q: string) => {
+    setSearchHistory(prev => {
+      const updated = prev.filter(item => item !== q);
+      localStorage.setItem('searchHistory', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const addToUserHistory = (user: any) => {
+    setRecentUsers(prev => {
+      const filtered = prev.filter(u => u.id !== user.id);
+      const updated = [user, ...filtered].slice(0, 10);
+      localStorage.setItem('recentUsers', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const removeFromUserHistory = (id: number) => {
+    setRecentUsers(prev => {
+      const updated = prev.filter(u => u.id !== id);
+      localStorage.setItem('recentUsers', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const clearHistory = () => {
+    setSearchHistory([]);
+    localStorage.removeItem('searchHistory');
+  };
+
+  const clearUserHistory = () => {
+    setRecentUsers([]);
+    localStorage.removeItem('recentUsers');
+  };
+
+  const handleSearch = async (val: string, isInitial = true) => {
     if (val.length < 2) return;
+    if (!isInitial && (loadingMore || !hasMore)) return;
+
+    if (isInitial) {
+      setHasSearched(true);
+      setOffset(0);
+      setHasMore(true);
+    } else {
+      setLoadingMore(true);
+    }
+
     try {
-      const res = await fetch(`/api/users/search?q=${val}`);
+      const currentOffset = isInitial ? 0 : offset;
+      const res = await fetch(`/api/users/search?q=${val}&limit=${limit}&offset=${currentOffset}`);
       if (res.ok) {
         const data = await res.json();
-        setResults(data);
+        if (isInitial) {
+          setResults(data);
+          if (data.users.length > 0 || data.tweets.length > 0) {
+            addToHistory(val);
+          }
+        } else {
+          setResults(prev => ({
+            users: [...prev.users, ...data.users],
+            tweets: [...prev.tweets, ...data.tweets]
+          }));
+        }
+        setHasMore(data.users.length === limit || data.tweets.length === limit);
+        setOffset(currentOffset + Math.max(data.users.length, data.tweets.length));
       }
     } catch (e) {
       console.error('Search failed:', e);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
   useEffect(() => {
-    if (query.length >= 2) handleSearch(query);
+    if (query.length >= 2) handleSearch(query, true);
   }, [refreshKey]);
+
+  const observer = useRef<IntersectionObserver | null>(null);
+  const lastResultRef = useCallback((node: HTMLDivElement | null) => {
+    if (loadingMore) return;
+    if (observer.current) observer.current.disconnect();
+    observer.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore) {
+        handleSearch(query, false);
+      }
+    });
+    if (node) observer.current.observe(node);
+  }, [loadingMore, hasMore, offset, query]);
 
   const handleLike = async (id: number) => {
     try {
@@ -837,76 +1169,239 @@ function SearchView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete,
 
   return (
     <div className="p-4">
-      <div className="mb-6">
+      <div className="mb-6 flex gap-2">
         <Input 
           placeholder="Search Jeak..." 
           value={query} 
-          onChange={(e: any) => handleSearch(e.target.value)}
+          onChange={(e: any) => {
+            setQuery(e.target.value);
+            setHasSearched(false);
+          }}
+          onKeyDown={(e: any) => e.key === 'Enter' && handleSearch(query)}
         />
+        <button 
+          onClick={() => handleSearch(query)}
+          className="p-3 bg-black dark:bg-white text-white dark:text-black rounded-xl active:scale-95 transition-transform"
+        >
+          <Search size={20} />
+        </button>
       </div>
       
-      {query.length >= 2 && (
+      {query.length < 2 && (searchHistory.length > 0 || recentUsers.length > 0) && (
         <div className="space-y-8">
-          {results.users.length > 0 && (
-            <section>
-              <h2 className="text-xs font-bold uppercase tracking-widest text-black/40 dark:text-white/40 mb-4">Users</h2>
-              <div className="space-y-4">
-                {results.users.map(u => (
-                  <button 
-                    key={u.id} 
-                    onClick={() => onNavigate(u.username)}
-                    className="flex items-center gap-3 w-full text-left hover:bg-black/5 dark:hover:bg-white/5 p-2 rounded-2xl transition-colors"
-                  >
-                    <div className="w-12 h-12 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden">
-                      {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" />}
-                    </div>
-                    <div>
-                      <div className="font-bold">{u.username}</div>
-                      <div className="text-sm text-black/40 dark:text-white/40">{u.bio}</div>
-                    </div>
-                  </button>
+          {searchHistory.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xs font-bold uppercase tracking-widest text-black/40 dark:text-white/40">Recent Searches</h2>
+                <button 
+                  onClick={clearHistory}
+                  className="text-xs font-bold text-blue-500 hover:underline"
+                >
+                  Clear all
+                </button>
+              </div>
+              <div className="space-y-1">
+                {searchHistory.map((item, i) => (
+                  <div key={i} className="flex items-center justify-between group">
+                    <button 
+                      onClick={() => {
+                        setQuery(item);
+                        handleSearch(item);
+                      }}
+                      className="flex items-center gap-3 flex-1 py-2 text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white transition-colors"
+                    >
+                      <Search size={16} />
+                      <span>{item}</span>
+                    </button>
+                    <button 
+                      onClick={() => removeFromHistory(item)}
+                      className="p-2 text-black/20 dark:text-white/20 hover:text-red-500 transition-colors"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
                 ))}
               </div>
-            </section>
+            </div>
           )}
 
-          {results.tweets.length > 0 && (
-            <section>
-              <h2 className="text-xs font-bold uppercase tracking-widest text-black/40 dark:text-white/40 mb-4">Tweets</h2>
-              <div className="divide-y divide-black/5 dark:border-white/5 -mx-4">
-                {results.tweets.map(t => <TweetCard key={t.id} tweet={t} onLike={handleLike} onRetweet={handleRetweet} onReply={onReply} onNavigate={onNavigate} onViewTweet={onViewTweet} currentUserId={currentUserId} onDelete={onDelete} />)}
+          {recentUsers.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xs font-bold uppercase tracking-widest text-black/40 dark:text-white/40">Recent Users</h2>
+                <button 
+                  onClick={clearUserHistory}
+                  className="text-xs font-bold text-blue-500 hover:underline"
+                >
+                  Clear all
+                </button>
               </div>
-            </section>
+              <div className="space-y-4">
+                {recentUsers.map(u => (
+                  <div key={u.id} className="flex items-center justify-between group">
+                    <button 
+                      onClick={() => onNavigate(u.username)}
+                      className="flex items-center gap-3 flex-1 hover:bg-black/5 dark:hover:bg-white/5 p-2 rounded-2xl transition-colors"
+                    >
+                      <div className="w-10 h-10 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden">
+                        {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" />}
+                      </div>
+                      <div>
+                        <div className="font-bold text-sm">{u.username}</div>
+                        <div className="text-xs text-black/40 dark:text-white/40 line-clamp-1">{u.bio}</div>
+                      </div>
+                    </button>
+                    <button 
+                      onClick={() => removeFromUserHistory(u.id)}
+                      className="p-2 text-black/20 dark:text-white/20 hover:text-red-500 transition-colors"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
+        </div>
+      )}
+      
+      {hasSearched ? (
+        (results.users.length > 0 || results.tweets.length > 0) ? (
+          <div className="space-y-8">
+            {results.users.length > 0 && (
+              <section>
+                <h2 className="text-xs font-bold uppercase tracking-widest text-black/40 dark:text-white/40 mb-4">Users</h2>
+                <div className="space-y-4">
+                  {results.users.map(u => (
+                    <button 
+                      key={u.id} 
+                      onClick={() => {
+                        addToUserHistory(u);
+                        onNavigate(u.username);
+                      }}
+                      className="flex items-center gap-3 w-full text-left hover:bg-black/5 dark:hover:bg-white/5 p-2 rounded-2xl transition-colors"
+                    >
+                      <div className="w-12 h-12 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden">
+                        {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" />}
+                      </div>
+                      <div>
+                        <div className="font-bold">{u.username}</div>
+                        <div className="text-sm text-black/40 dark:text-white/40">{u.bio}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {results.tweets.length > 0 && (
+              <section>
+                <h2 className="text-xs font-bold uppercase tracking-widest text-black/40 dark:text-white/40 mb-4">Tweets</h2>
+                <div className="divide-y divide-black/5 dark:border-white/5 -mx-4">
+                  {results.tweets.map((t) => (
+                    <TweetCard 
+                      key={t.id} 
+                      tweet={t} 
+                      onLike={handleLike} 
+                      onRetweet={handleRetweet} 
+                      onReply={onReply} 
+                      onNavigate={onNavigate} 
+                      onViewTweet={onViewTweet} 
+                      currentUserId={currentUserId} 
+                      onDelete={onDelete} 
+                      onImageClick={() => onViewTweet(t.retweet_id || t.id)}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+            <div ref={lastResultRef} className="h-4" />
+            {loadingMore && (
+              <div className="p-4 text-center text-black/40 dark:text-white/40 text-sm">
+                Loading more...
+              </div>
+            )}
+          </div>
+        ) : query.length >= 2 && (
+          <div className="p-12 text-center text-black/40 dark:text-white/40">
+            No results found for "{query}"
+          </div>
+        )
+      ) : query.length >= 2 && (
+        <div className="p-12 text-center text-black/40 dark:text-white/40">
+          <p className="text-lg font-medium mb-2">Press Enter to search</p>
+          <p className="text-sm">Or click the magnifier icon to confirm</p>
         </div>
       )}
     </div>
   );
 }
 
-function ProfileView({ username, isOwn, setView, onReply, onViewTweet, onDelete, currentUserId, refreshKey, onImageClick }: { username: string, isOwn?: boolean, setView?: any, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, onDelete?: (id: number) => void, currentUserId?: number, refreshKey?: number, onImageClick?: (images: string[], index: number) => void }) {
+function ProfileView({ username, isOwn, setView, onReply, onViewTweet, onDelete, currentUserId, refreshKey, onMessage }: { username: string, isOwn?: boolean, setView?: any, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, onDelete?: (id: number) => void, currentUserId?: number, refreshKey?: number, onMessage: (userId: number) => void }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [tweets, setTweets] = useState<Tweet[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const [showBlockConfirm, setShowBlockConfirm] = useState(false);
+  const limit = 20;
+
+  const loadProfileData = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/users/${username}`);
+      const profileData = res.ok ? await res.json() : null;
+      setProfile(profileData);
+      
+      // Initial tweets fetch
+      const tweetsRes = await fetch(`/api/tweets/user/${username}?limit=${limit}&offset=0`);
+      const tweetsData = tweetsRes.ok ? await tweetsRes.json() : [];
+      const newTweets = Array.isArray(tweetsData) ? tweetsData : [];
+      setTweets(newTweets);
+      setHasMore(newTweets.length === limit);
+      setOffset(newTweets.length);
+    } catch (e) {
+      console.error('Failed to load profile data:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMoreTweets = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(`/api/tweets/user/${username}?limit=${limit}&offset=${offset}`);
+      if (res.ok) {
+        const data = await res.json();
+        const newTweets = Array.isArray(data) ? data : [];
+        setTweets(prev => [...prev, ...newTweets]);
+        setHasMore(newTweets.length === limit);
+        setOffset(prev => prev + newTweets.length);
+      }
+    } catch (e) {
+      console.error('Failed to load more tweets:', e);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
-    const loadProfileData = async () => {
-      try {
-        const [profileRes, tweetsRes] = await Promise.all([
-          fetch(`/api/users/${username}`),
-          fetch(`/api/tweets/user/${username}`)
-        ]);
-        
-        const profileData = profileRes.ok ? await profileRes.json() : null;
-        const tweetsData = tweetsRes.ok ? await tweetsRes.json() : [];
-        
-        setProfile(profileData);
-        setTweets(Array.isArray(tweetsData) ? tweetsData : []);
-      } catch (e) {
-        console.error('Failed to load profile data:', e);
-      }
-    };
     loadProfileData();
   }, [username, refreshKey]);
+
+  const observer = useRef<IntersectionObserver | null>(null);
+  const lastTweetRef = useCallback((node: HTMLDivElement | null) => {
+    if (loading || loadingMore) return;
+    if (observer.current) observer.current.disconnect();
+    observer.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore) {
+        loadMoreTweets();
+      }
+    });
+    if (node) observer.current.observe(node);
+  }, [loading, loadingMore, hasMore, offset, username]);
 
   const handleFollow = async () => {
     if (!profile) return;
@@ -921,6 +1416,24 @@ function ProfileView({ username, isOwn, setView, onReply, onViewTweet, onDelete,
       }
     } catch (e) {
       console.error('Failed to follow user:', e);
+    }
+  };
+
+  const handleBlock = async () => {
+    if (!profile) return;
+    try {
+      const res = await fetch(`/api/users/${profile.id}/block`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setProfile(prev => prev ? {
+          ...prev,
+          is_blocked: data.isBlocked,
+          is_following: data.isBlocked ? false : prev.is_following,
+          followers_count: (data.isBlocked && prev.is_following) ? prev.followers_count - 1 : prev.followers_count
+        } : null);
+      }
+    } catch (e) {
+      console.error('Failed to block user:', e);
     }
   };
 
@@ -977,14 +1490,50 @@ function ProfileView({ username, isOwn, setView, onReply, onViewTweet, onDelete,
               <SettingsIcon size={20} />
             </Button>
           ) : (
-            <Button 
-              variant={profile.is_following ? 'secondary' : 'primary'}
-              onClick={handleFollow}
-            >
-              {profile.is_following ? 'Following' : 'Follow'}
-            </Button>
+            <div className="flex gap-2">
+              <Button 
+                variant="secondary"
+                onClick={() => setShowBlockConfirm(true)}
+                className={cn(profile.is_blocked && "text-red-500 border-red-500/20 bg-red-500/5")}
+              >
+                {profile.is_blocked ? <Shield size={20} /> : <Ban size={20} />}
+              </Button>
+              {!profile.is_blocked && (
+                <Button 
+                  variant="secondary"
+                  onClick={() => onMessage(profile.id)}
+                >
+                  <MessageSquare size={20} />
+                </Button>
+              )}
+              <Button 
+                variant={profile.is_following ? 'secondary' : 'primary'}
+                onClick={handleFollow}
+                disabled={profile.is_blocked}
+              >
+                {profile.is_following ? 'Following' : 'Follow'}
+              </Button>
+            </div>
           )}
         </div>
+
+        <AnimatePresence>
+          {showBlockConfirm && (
+            <ConfirmModal 
+              title={profile.is_blocked ? "Unblock User?" : "Block User?"}
+              message={profile.is_blocked 
+                ? `They will be able to follow you and send you messages again.` 
+                : `They will not be able to follow you, send you messages, or see your tweets.`}
+              confirmText={profile.is_blocked ? "Unblock" : "Block"}
+              isDestructive={!profile.is_blocked}
+              onConfirm={() => {
+                handleBlock();
+                setShowBlockConfirm(false);
+              }}
+              onCancel={() => setShowBlockConfirm(false)}
+            />
+          )}
+        </AnimatePresence>
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-black">{profile.username}</h1>
           {profile.tier === 0 && <CheckCircle2 size={20} className="text-blue-500" />}
@@ -1001,8 +1550,26 @@ function ProfileView({ username, isOwn, setView, onReply, onViewTweet, onDelete,
         </div>
       </div>
       <div className="border-t border-black/5 dark:border-white/5 divide-y divide-black/5 dark:divide-white/5">
-        {tweets.map(t => <TweetCard key={t.id} tweet={t} onLike={handleLike} onRetweet={handleRetweet} onReply={onReply} onViewTweet={onViewTweet} onDelete={onDelete} currentUserId={currentUserId} />)}
+        {tweets.map((t, index) => (
+          <div key={t.id} ref={index === tweets.length - 1 ? lastTweetRef : null}>
+            <TweetCard 
+              tweet={t} 
+              onLike={handleLike} 
+              onRetweet={handleRetweet} 
+              onReply={onReply} 
+              onViewTweet={onViewTweet} 
+              onDelete={onDelete} 
+              currentUserId={currentUserId} 
+              onImageClick={() => onViewTweet(t.retweet_id || t.id)}
+            />
+          </div>
+        ))}
       </div>
+      {loadingMore && (
+        <div className="p-4 text-center text-black/40 dark:text-white/40 text-sm">
+          Loading more...
+        </div>
+      )}
     </div>
   );
 }
@@ -1010,22 +1577,58 @@ function ProfileView({ username, isOwn, setView, onReply, onViewTweet, onDelete,
 function UserListView({ username, type, onNavigate, onBack }: { username: string, type: 'followers' | 'following', onNavigate: (username: string) => void, onBack: () => void }) {
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const limit = 20;
+
+  const fetchUsers = async (isInitial = false) => {
+    if (!isInitial && (loadingMore || !hasMore)) return;
+
+    if (isInitial) {
+      setLoading(true);
+      setOffset(0);
+    } else {
+      setLoadingMore(true);
+    }
+
+    try {
+      const currentOffset = isInitial ? 0 : offset;
+      const res = await fetch(`/api/users/${username}/${type}?limit=${limit}&offset=${currentOffset}`);
+      if (res.ok) {
+        const data = await res.json();
+        const newUsers = Array.isArray(data) ? data : [];
+        if (isInitial) {
+          setUsers(newUsers);
+        } else {
+          setUsers(prev => [...prev, ...newUsers]);
+        }
+        setHasMore(newUsers.length === limit);
+        setOffset(currentOffset + newUsers.length);
+      }
+    } catch (e) {
+      console.error(`Failed to fetch ${type}:`, e);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const res = await fetch(`/api/users/${username}/${type}`);
-        const data = res.ok ? await res.json() : [];
-        setUsers(Array.isArray(data) ? data : []);
-      } catch (e) {
-        console.error(`Failed to fetch ${type}:`, e);
-        setUsers([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchUsers();
+    fetchUsers(true);
   }, [username, type]);
+
+  const observer = useRef<IntersectionObserver | null>(null);
+  const lastUserRef = useCallback((node: HTMLDivElement | null) => {
+    if (loading || loadingMore) return;
+    if (observer.current) observer.current.disconnect();
+    observer.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore) {
+        fetchUsers();
+      }
+    });
+    if (node) observer.current.observe(node);
+  }, [loading, loadingMore, hasMore, offset, username, type]);
 
   return (
     <div>
@@ -1043,24 +1646,30 @@ function UserListView({ username, type, onNavigate, onBack }: { username: string
         </div>
       ) : (
         <div className="divide-y divide-black/5 dark:border-white/5">
-          {users.map(u => (
-            <button 
-              key={u.id} 
-              onClick={() => onNavigate(u.username)}
-              className="flex items-center gap-3 w-full text-left hover:bg-black/5 dark:hover:bg-white/5 p-4 transition-colors"
-            >
-              <div className="w-12 h-12 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden flex-shrink-0">
-                {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" />}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1">
-                  <div className="font-bold truncate">{u.username}</div>
-                  {u.tier === 0 && <CheckCircle2 size={14} className="text-blue-500" />}
+          {users.map((u, index) => (
+            <div key={u.id} ref={index === users.length - 1 ? lastUserRef : null}>
+              <button 
+                onClick={() => onNavigate(u.username)}
+                className="flex items-center gap-3 w-full text-left hover:bg-black/5 dark:hover:bg-white/5 p-4 transition-colors"
+              >
+                <div className="w-12 h-12 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden flex-shrink-0">
+                  {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" />}
                 </div>
-                <div className="text-sm text-black/40 dark:text-white/40 truncate">{u.bio}</div>
-              </div>
-            </button>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1">
+                    <div className="font-bold truncate">{u.username}</div>
+                    {u.tier === 0 && <CheckCircle2 size={14} className="text-blue-500" />}
+                  </div>
+                  <div className="text-sm text-black/40 dark:text-white/40 truncate">{u.bio}</div>
+                </div>
+              </button>
+            </div>
           ))}
+          {loadingMore && (
+            <div className="p-4 text-center text-black/40 dark:text-white/40 text-sm">
+              Loading more...
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1070,23 +1679,74 @@ function UserListView({ username, type, onNavigate, onBack }: { username: string
 function TweetDetailView({ tweetId, onNavigate, onReply, onViewTweet, onBack, currentUserId, onDelete, refreshKey, onImageClick }: { tweetId: number, onNavigate: (username: string) => void, onReply: (t: Tweet) => void, onViewTweet: (id: number) => void, onBack: () => void, currentUserId?: number, onDelete?: (id: number) => void, refreshKey?: number, onImageClick?: (images: string[], index: number) => void }) {
   const [data, setData] = useState<{ tweet: Tweet, replies: Tweet[], parent?: Tweet } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const limit = 20;
+  const [showExactDate, setShowExactDate] = useState(false);
+
+  const loadTweetDetail = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/tweets/${tweetId}`);
+      const d = res.ok ? await res.json() : null;
+      
+      if (d) {
+        // Initial replies fetch
+        const repliesRes = await fetch(`/api/tweets/${tweetId}/replies?limit=${limit}&offset=0`);
+        const repliesData = repliesRes.ok ? await repliesRes.json() : [];
+        const newReplies = Array.isArray(repliesData) ? repliesData : [];
+        setData({ ...d, replies: newReplies });
+        setHasMore(newReplies.length === limit);
+        setOffset(newReplies.length);
+      } else {
+        setData(null);
+      }
+    } catch (e) {
+      console.error('Failed to load tweet detail:', e);
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMoreReplies = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(`/api/tweets/${tweetId}/replies?limit=${limit}&offset=${offset}`);
+      if (res.ok) {
+        const data = await res.json();
+        const newReplies = Array.isArray(data) ? data : [];
+        setData(prev => prev ? {
+          ...prev,
+          replies: [...prev.replies, ...newReplies]
+        } : null);
+        setHasMore(newReplies.length === limit);
+        setOffset(prev => prev + newReplies.length);
+      }
+    } catch (e) {
+      console.error('Failed to load more replies:', e);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
-    const loadTweetDetail = async () => {
-      setLoading(true);
-      try {
-        const res = await fetch(`/api/tweets/${tweetId}`);
-        const d = res.ok ? await res.json() : null;
-        setData(d);
-      } catch (e) {
-        console.error('Failed to load tweet detail:', e);
-        setData(null);
-      } finally {
-        setLoading(false);
-      }
-    };
     loadTweetDetail();
   }, [tweetId, refreshKey]);
+
+  const observer = useRef<IntersectionObserver | null>(null);
+  const lastReplyRef = useCallback((node: HTMLDivElement | null) => {
+    if (loading || loadingMore) return;
+    if (observer.current) observer.current.disconnect();
+    observer.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore) {
+        loadMoreReplies();
+      }
+    });
+    if (node) observer.current.observe(node);
+  }, [loading, loadingMore, hasMore, offset, tweetId]);
 
   const handleLike = async (id: number) => {
     try {
@@ -1195,9 +1855,14 @@ function TweetDetailView({ tweetId, onNavigate, onReply, onViewTweet, onBack, cu
           onImageClick={(index) => onImageClick?.(data.tweet.images || [], index)} 
         />
 
-        <div className="text-sm text-black/40 dark:text-white/40 mb-4 pb-4 border-b border-black/5 dark:border-white/5">
-          {new Date(data.tweet.created_at).toLocaleTimeString()} · {new Date(data.tweet.created_at).toLocaleDateString()}
-        </div>
+        <button 
+          onClick={() => setShowExactDate(!showExactDate)}
+          className="text-sm text-black/40 dark:text-white/40 mb-4 pb-4 border-b border-black/5 dark:border-white/5 block w-full text-left hover:underline"
+        >
+          {showExactDate 
+            ? formatTehranTime(data.tweet.created_at) 
+            : formatRelativeTime(data.tweet.created_at)}
+        </button>
         <div className="flex gap-6 text-sm mb-4 pb-4 border-b border-black/5 dark:border-white/5">
           <span><strong className="font-bold">{data.tweet.retweets_count}</strong> <span className="text-black/40 dark:text-white/40">Retweets</span></span>
           <span><strong className="font-bold">{data.tweet.likes_count}</strong> <span className="text-black/40 dark:text-white/40">Likes</span></span>
@@ -1211,19 +1876,25 @@ function TweetDetailView({ tweetId, onNavigate, onReply, onViewTweet, onBack, cu
       </div>
 
       <div className="divide-y divide-black/5 dark:border-white/5">
-        {data.replies.map(reply => (
-          <TweetCard 
-            key={reply.id} 
-            tweet={reply} 
-            onLike={handleLike} 
-            onRetweet={handleRetweet} 
-            onReply={onReply} 
-            onNavigate={onNavigate} 
-            onViewTweet={onViewTweet}
-            onDelete={onDelete}
-            currentUserId={currentUserId}
-          />
+        {data.replies.map((reply, index) => (
+          <div key={reply.id} ref={index === data.replies.length - 1 ? lastReplyRef : null}>
+            <TweetCard 
+              tweet={reply} 
+              onLike={handleLike} 
+              onRetweet={handleRetweet} 
+              onReply={onReply} 
+              onNavigate={onNavigate} 
+              onViewTweet={onViewTweet}
+              onDelete={onDelete}
+              currentUserId={currentUserId}
+            />
+          </div>
         ))}
+        {loadingMore && (
+          <div className="p-4 text-center text-black/40 dark:text-white/40 text-sm">
+            Loading more...
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1873,6 +2544,413 @@ function ComposeModal({ onClose, replyTo, onTweeted }: { onClose: () => void, re
           </label>
         </div>
       </motion.div>
+    </div>
+  );
+}
+
+function MessagesView({ onNavigateChat }: { onNavigateChat: (userId: number) => void }) {
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchConversations = async () => {
+      try {
+        const res = await fetch('/api/messages/conversations');
+        if (res.ok) {
+          const data = await res.json();
+          setConversations(data);
+        }
+      } catch (e) {
+        console.error('Failed to fetch conversations:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchConversations();
+  }, []);
+
+  return (
+    <div>
+      <header className="sticky top-0 bg-white/80 dark:bg-black/80 backdrop-blur-xl z-30 p-4 border-b border-black/5 dark:border-white/5">
+        <h1 className="text-xl font-black">Messages</h1>
+      </header>
+      {loading ? (
+        <div className="p-8 text-center text-black/40 dark:text-white/40">Loading conversations...</div>
+      ) : conversations.length === 0 ? (
+        <div className="p-12 text-center text-black/40 dark:text-white/40">
+          <p className="text-lg font-medium mb-2">No messages yet</p>
+          <p className="text-sm">Start a conversation from someone's profile!</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-black/5 dark:border-white/5">
+          {conversations.map((conv) => (
+            <button
+              key={conv.other_user_id}
+              onClick={() => onNavigateChat(conv.other_user_id)}
+              className="flex items-center gap-3 w-full text-left hover:bg-black/5 dark:hover:bg-white/5 p-4 transition-colors"
+            >
+              <div className="w-12 h-12 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden flex-shrink-0">
+                {conv.avatar && <img src={conv.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold truncate">{conv.username}</div>
+                  <div className="text-xs text-black/40 dark:text-white/40">{formatRelativeTime(conv.last_message_at)}</div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-black/40 dark:text-white/40 truncate">{conv.last_message}</div>
+                  {conv.unread_count > 0 && (
+                    <div className="bg-black dark:bg-white text-white dark:text-black text-[10px] font-bold rounded-full px-1.5 py-0.5 min-w-[1.25rem] text-center">
+                      {conv.unread_count}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatRoomView({ otherUserId, currentUserId, onBack, onNavigateProfile, onImageClick }: { otherUserId: number, currentUserId: number, onBack: () => void, onNavigateProfile: (username: string) => void, onImageClick: (images: string[], index: number) => void }) {
+  const [messages, setMessages] = useState<any[]>([]);
+  const [otherUser, setOtherUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const [content, setContent] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [showBlockConfirm, setShowBlockConfirm] = useState(false);
+  const [key, setKey] = useState<CryptoKey | null>(null);
+  const limit = 30;
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const initChat = async () => {
+      const derivedKey = await deriveKey(currentUserId, otherUserId);
+      setKey(derivedKey);
+      fetchMessages(true, derivedKey);
+    };
+    initChat();
+  }, [otherUserId]);
+
+  const fetchMessages = async (isInitial = false, derivedKey?: CryptoKey) => {
+    if (!isInitial && (loadingMore || !hasMore)) return;
+    
+    if (isInitial) {
+      setLoading(true);
+      setOffset(0);
+    } else {
+      setLoadingMore(true);
+    }
+
+    try {
+      const currentOffset = isInitial ? 0 : offset;
+      const res = await fetch(`/api/messages/${otherUserId}?limit=${limit}&offset=${currentOffset}${searchQuery ? `&q=${encodeURIComponent(searchQuery)}` : ''}`);
+      if (res.ok) {
+        const data = await res.json();
+        setOtherUser(data.otherUser);
+        setIsBlocked(data.isBlocked);
+        
+        const activeKey = derivedKey || key;
+        const decryptedMessages = await Promise.all(data.messages.map(async (m: any) => ({
+          ...m,
+          content: await decryptMessage(m.content, activeKey!)
+        })));
+
+        if (isInitial) {
+          setMessages(decryptedMessages);
+        } else {
+          setMessages(prev => [...decryptedMessages, ...prev]);
+        }
+        setHasMore(data.messages.length === limit);
+        setOffset(currentOffset + data.messages.length);
+      }
+    } catch (e) {
+      console.error('Failed to fetch messages:', e);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  };
+
+  const handleSend = async (imageUrl?: string) => {
+    if (!content.trim() && !imageUrl) return;
+    if (!key) return;
+
+    try {
+      const encrypted = await encryptMessage(content || '', key);
+      const res = await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          receiver_id: otherUserId,
+          content: encrypted,
+          image_url: imageUrl
+        })
+      });
+
+      if (res.ok) {
+        const newMessage = await res.json();
+        setMessages(prev => [{ ...newMessage, content: content || '', is_read: 0 }, ...prev]);
+        setContent('');
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to send message');
+      }
+    } catch (e) {
+      console.error('Failed to send message:', e);
+    }
+  };
+
+  const handleDelete = async (messageId: number) => {
+    try {
+      const res = await fetch(`/api/messages/${messageId}`, { method: 'DELETE' });
+      if (res.ok) {
+        setMessages(prev => prev.filter(m => m.id !== messageId));
+      }
+    } catch (e) {
+      console.error('Failed to delete message:', e);
+    }
+  };
+
+  const handleBlock = async () => {
+    try {
+      const res = await fetch(`/api/users/${otherUserId}/block`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setIsBlocked(data.isBlocked);
+        setShowBlockConfirm(false);
+      }
+    } catch (e) {
+      console.error('Failed to block user:', e);
+    }
+  };
+
+  const handleImageUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const compressed = await compressImage(file, { maxWidthOrHeight: 800, maxSizeMB: 0.2 });
+      const base64 = await fileToBase64(compressed);
+      handleSend(base64);
+    } catch (e) {
+      console.error('Failed to upload image:', e);
+    }
+  };
+
+  const observer = useRef<IntersectionObserver | null>(null);
+  const lastMessageRef = useCallback((node: HTMLDivElement | null) => {
+    if (loading || loadingMore) return;
+    if (observer.current) observer.current.disconnect();
+    observer.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore) {
+        fetchMessages();
+      }
+    });
+    if (node) observer.current.observe(node);
+  }, [loading, loadingMore, hasMore, offset, otherUserId, searchQuery]);
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-64px)] md:h-screen">
+      <header className="sticky top-0 bg-white/80 dark:bg-black/80 backdrop-blur-xl z-30 p-4 border-b border-black/5 dark:border-white/5 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5">
+            <ArrowLeft size={20} />
+          </button>
+          {otherUser && (
+            <button 
+              onClick={() => onNavigateProfile(otherUser.username)}
+              className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+            >
+              <div className="w-10 h-10 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden">
+                {otherUser.avatar && <img src={otherUser.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
+              </div>
+              <div>
+                <div className="font-bold text-sm">{otherUser.username}</div>
+                <div className="text-[10px] text-black/40 dark:text-white/40 uppercase tracking-widest font-bold">
+                  {isBlocked ? 'Blocked' : 'Direct Message'}
+                </div>
+              </div>
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => setIsSearching(!isSearching)}
+            className={cn("p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 transition-colors", isSearching && "text-blue-500")}
+          >
+            <Search size={20} />
+          </button>
+          <button 
+            onClick={() => setShowBlockConfirm(true)}
+            className={cn("p-2 rounded-full hover:bg-red-500/10 transition-colors", isBlocked ? "text-red-500" : "text-black/40 dark:text-white/40")}
+          >
+            <Ban size={20} />
+          </button>
+        </div>
+      </header>
+
+      {isSearching && (
+        <div className="p-4 border-b border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.02]">
+          <div className="relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-black/40 dark:text-white/40" size={18} />
+            <input 
+              autoFocus
+              placeholder="Search messages..."
+              className="w-full pl-12 pr-4 py-2 rounded-full bg-white dark:bg-black border border-black/5 dark:border-white/5 outline-none focus:ring-2 focus:ring-black dark:focus:ring-white transition-all"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && fetchMessages(true)}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto p-4 flex flex-col-reverse gap-4">
+        {loading ? (
+          <div className="p-8 text-center text-black/40 dark:text-white/40">Loading messages...</div>
+        ) : messages.length === 0 ? (
+          <div className="p-12 text-center text-black/40 dark:text-white/40">
+            <p className="text-lg font-medium mb-2">{searchQuery ? 'No results found' : 'No messages yet'}</p>
+            <p className="text-sm">{searchQuery ? 'Try a different search term' : 'Say hello!'}</p>
+          </div>
+        ) : (
+          <>
+            {messages.map((m, index) => (
+              <div 
+                key={m.id} 
+                ref={index === messages.length - 1 ? lastMessageRef : null}
+                className={cn(
+                  "flex flex-col max-w-[80%]",
+                  m.sender_id === currentUserId ? "self-end items-end" : "self-start items-start"
+                )}
+              >
+                <div className={cn(
+                  "p-3 rounded-2xl text-[15px] relative group",
+                  m.sender_id === currentUserId 
+                    ? "bg-black dark:bg-white text-white dark:text-black rounded-tr-none" 
+                    : "bg-black/5 dark:bg-white/5 text-black dark:text-white rounded-tl-none"
+                )}>
+                  {m.image_url && (
+                    <img 
+                      src={m.image_url} 
+                      alt="Shared image" 
+                      className="rounded-xl mb-2 max-w-full h-auto cursor-pointer hover:opacity-90 transition-opacity"
+                      referrerPolicy="no-referrer"
+                      onClick={() => onImageClick([m.image_url], 0)}
+                    />
+                  )}
+                  <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                  
+                  {m.sender_id === currentUserId && (
+                    <button 
+                      onClick={() => handleDelete(m.id)}
+                      className="absolute -left-10 top-1/2 -translate-y-1/2 p-2 rounded-full hover:bg-red-500/10 text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mt-1 px-1">
+                  <span className="text-[10px] text-black/40 dark:text-white/40">
+                    {formatRelativeTime(m.created_at)}
+                  </span>
+                  {m.sender_id === currentUserId && (
+                    <div className="flex items-center">
+                      {m.is_read ? (
+                        <CheckCheck size={12} className="text-blue-500" />
+                      ) : (
+                        <Check size={12} className="text-black/40 dark:text-white/40" />
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {loadingMore && (
+              <div className="p-4 text-center text-black/40 dark:text-white/40 text-xs">
+                Loading older messages...
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="p-4 border-t border-black/5 dark:border-white/5 bg-white/80 dark:bg-black/80 backdrop-blur-xl sticky bottom-0">
+        <div className="flex items-end gap-2">
+          <label className="p-3 rounded-full hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer transition-colors flex-shrink-0">
+            <ImageIcon size={20} className="text-blue-500" />
+            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+          </label>
+          <div className="flex-1 relative">
+            <textarea 
+              placeholder={isBlocked ? "You cannot message this user" : "Type a message..."}
+              disabled={isBlocked}
+              className="w-full px-4 py-3 rounded-2xl bg-black/5 dark:bg-white/5 border-none focus:ring-2 focus:ring-black dark:focus:ring-white outline-none transition-all resize-none max-h-32 min-h-[48px]"
+              rows={1}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+            />
+          </div>
+          <button 
+            onClick={() => handleSend()}
+            disabled={(!content.trim()) || isBlocked}
+            className="p-3 rounded-full bg-black dark:bg-white text-white dark:text-black hover:opacity-90 active:scale-95 transition-all disabled:opacity-50 flex-shrink-0"
+          >
+            <Send size={20} />
+          </button>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {showBlockConfirm && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white dark:bg-black p-6 rounded-3xl shadow-2xl max-w-sm w-full border border-black/5 dark:border-white/5"
+            >
+              <h3 className="text-xl font-black mb-2">{isBlocked ? 'Unblock' : 'Block'} {otherUser?.username}?</h3>
+              <p className="text-black/60 dark:text-white/60 mb-6">
+                {isBlocked 
+                  ? 'They will be able to follow you and send you messages again.' 
+                  : 'They will not be able to follow you, send you messages, or see your tweets.'}
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowBlockConfirm(false)}
+                  className="flex-1 py-3 rounded-2xl bg-black/5 dark:bg-white/5 font-bold hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleBlock}
+                  className={cn(
+                    "flex-1 py-3 rounded-2xl font-bold text-white transition-colors",
+                    isBlocked ? "bg-black dark:bg-white dark:text-black" : "bg-red-500 hover:bg-red-600"
+                  )}
+                >
+                  {isBlocked ? 'Unblock' : 'Block'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

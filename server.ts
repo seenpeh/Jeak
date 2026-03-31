@@ -68,6 +68,27 @@ db.exec(`
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(actor_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender_id INTEGER NOT NULL,
+    receiver_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    image_url TEXT,
+    is_read INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(sender_id) REFERENCES users(id),
+    FOREIGN KEY(receiver_id) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS blocks (
+    blocker_id INTEGER NOT NULL,
+    blocked_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(blocker_id, blocked_id),
+    FOREIGN KEY(blocker_id) REFERENCES users(id),
+    FOREIGN KEY(blocked_id) REFERENCES users(id)
+  );
 `);
 
 // Migration: Add parent_id and retweet_id to tweets if missing
@@ -251,6 +272,8 @@ async function startServer() {
   };
 
   app.get('/api/tweets/following', authenticateToken, (req: any, res) => {
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = parseInt(req.query.offset as string) || 0;
     const tweets = db.prepare(`
       SELECT t.*, u.username, u.avatar, u.avatar_small, u.tier,
       rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, ru.avatar_small as original_avatar_small, rt.created_at as original_created_at,
@@ -266,11 +289,14 @@ async function startServer() {
       WHERE (t.user_id IN (SELECT following_id FROM follows WHERE follower_id = ?) OR t.user_id = ?)
       AND t.parent_id IS NULL
       ORDER BY t.created_at DESC
-    `).all(req.user.id, req.user.id, req.user.id, req.user.id);
+      LIMIT ? OFFSET ?
+    `).all(req.user.id, req.user.id, req.user.id, req.user.id, limit, offset);
     res.json(enrichTweets(tweets));
   });
 
   app.get('/api/tweets/explore', authenticateToken, (req: any, res) => {
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = parseInt(req.query.offset as string) || 0;
     const tweets = db.prepare(`
       SELECT DISTINCT t.*, u.username, u.avatar, u.avatar_small, u.tier,
       rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, ru.avatar_small as original_avatar_small, rt.created_at as original_created_at,
@@ -288,12 +314,14 @@ async function startServer() {
       AND t.user_id != ?
       AND t.parent_id IS NULL
       ORDER BY t.created_at DESC
-      LIMIT 50
-    `).all(req.user.id, req.user.id, req.user.id, req.user.id);
+      LIMIT ? OFFSET ?
+    `).all(req.user.id, req.user.id, req.user.id, req.user.id, limit, offset);
     res.json(enrichTweets(tweets));
   });
 
   app.get('/api/tweets/user/:username', authenticateToken, (req: any, res) => {
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = parseInt(req.query.offset as string) || 0;
     const tweets = db.prepare(`
       SELECT t.*, u.username, u.avatar, u.avatar_small, u.tier,
       rt.content as original_content, ru.username as original_username, ru.avatar as original_avatar, ru.avatar_small as original_avatar_small, rt.created_at as original_created_at,
@@ -309,7 +337,8 @@ async function startServer() {
       WHERE u.username = ?
       AND t.parent_id IS NULL
       ORDER BY t.created_at DESC
-    `).all(req.user.id, req.user.id, req.params.username);
+      LIMIT ? OFFSET ?
+    `).all(req.user.id, req.user.id, req.params.username, limit, offset);
     res.json(enrichTweets(tweets));
   });
 
@@ -328,6 +357,27 @@ async function startServer() {
       db.prepare('DELETE FROM likes WHERE user_id = ? AND tweet_id = ?').run(req.user.id, req.params.id);
       res.json({ message: 'Unliked' });
     }
+  });
+
+  app.get('/api/tweets/:id/replies', authenticateToken, (req: any, res) => {
+    const tweetId = req.params.id;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const replies = db.prepare(`
+      SELECT t.*, u.username, u.avatar, u.avatar_small, u.tier,
+      (SELECT COUNT(*) FROM likes WHERE tweet_id = t.id) as likes_count,
+      (SELECT 1 FROM likes WHERE tweet_id = t.id AND user_id = ?) as is_liked,
+      (SELECT COUNT(*) FROM tweets WHERE retweet_id = t.id) as retweets_count,
+      (SELECT 1 FROM tweets WHERE user_id = ? AND retweet_id = t.id) as is_retweeted,
+      (SELECT COUNT(*) FROM tweets WHERE parent_id = t.id) as replies_count
+      FROM tweets t
+      JOIN users u ON t.user_id = u.id
+      WHERE t.parent_id = ?
+      ORDER BY t.created_at ASC
+      LIMIT ? OFFSET ?
+    `).all(req.user.id, req.user.id, tweetId, limit, offset);
+
+    res.json(enrichTweets(replies));
   });
 
   app.get('/api/tweets/:id', authenticateToken, (req: any, res) => {
@@ -367,34 +417,23 @@ async function startServer() {
       if (parent) parent = enrichTweets([parent])[0];
     }
 
-    const replies = db.prepare(`
-      SELECT t.*, u.username, u.avatar, u.avatar_small, u.tier,
-      (SELECT COUNT(*) FROM likes WHERE tweet_id = t.id) as likes_count,
-      (SELECT 1 FROM likes WHERE tweet_id = t.id AND user_id = ?) as is_liked,
-      (SELECT COUNT(*) FROM tweets WHERE retweet_id = t.id) as retweets_count,
-      (SELECT 1 FROM tweets WHERE user_id = ? AND retweet_id = t.id) as is_retweeted,
-      (SELECT COUNT(*) FROM tweets WHERE parent_id = t.id) as replies_count
-      FROM tweets t
-      JOIN users u ON t.user_id = u.id
-      WHERE t.parent_id = ?
-      ORDER BY t.created_at ASC
-    `).all(req.user.id, req.user.id, tweetId);
-
-    res.json({ tweet: enrichedTweet, replies: enrichTweets(replies), parent });
+    res.json({ tweet: enrichedTweet, parent });
   });
 
   // --- User Routes ---
   app.get('/api/users/search', authenticateToken, (req, res) => {
     const q = req.query.q || '';
-    const users = db.prepare('SELECT id, username, bio, avatar FROM users WHERE username LIKE ? LIMIT 20').all(`%${q}%`);
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const users = db.prepare('SELECT id, username, bio, avatar FROM users WHERE username LIKE ? LIMIT ? OFFSET ?').all(`%${q}%`, limit, offset);
     const tweets = db.prepare(`
       SELECT t.*, u.username, u.avatar 
       FROM tweets t 
       JOIN users u ON t.user_id = u.id 
       WHERE t.content LIKE ? 
       ORDER BY t.created_at DESC 
-      LIMIT 20
-    `).all(`%${q}%`);
+      LIMIT ? OFFSET ?
+    `).all(`%${q}%`, limit, offset);
     res.json({ users, tweets });
   });
 
@@ -404,9 +443,10 @@ async function startServer() {
       (SELECT COUNT(*) FROM follows WHERE follower_id = users.id) as following_count,
       (SELECT COUNT(*) FROM follows WHERE following_id = users.id) as followers_count,
       (SELECT COUNT(*) FROM tweets WHERE user_id = users.id) as tweets_count,
-      (SELECT 1 FROM follows WHERE follower_id = ? AND following_id = users.id) as is_following
+      (SELECT 1 FROM follows WHERE follower_id = ? AND following_id = users.id) as is_following,
+      (SELECT 1 FROM blocks WHERE blocker_id = ? AND blocked_id = users.id) as is_blocked
       FROM users WHERE username = ?
-    `).get(req.user.id, req.params.username);
+    `).get(req.user.id, req.user.id, req.params.username);
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(user || null);
   });
@@ -432,24 +472,30 @@ async function startServer() {
   app.get('/api/users/:username/followers', authenticateToken, (req, res) => {
     const user: any = db.prepare('SELECT id FROM users WHERE username = ?').get(req.params.username);
     if (!user) return res.status(404).json({ error: 'User not found' });
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = parseInt(req.query.offset as string) || 0;
     const followers = db.prepare(`
       SELECT u.id, u.username, u.avatar, u.bio, u.tier
       FROM users u
       JOIN follows f ON u.id = f.follower_id
       WHERE f.following_id = ?
-    `).all(user.id);
+      LIMIT ? OFFSET ?
+    `).all(user.id, limit, offset);
     res.json(followers);
   });
 
   app.get('/api/users/:username/following', authenticateToken, (req, res) => {
     const user: any = db.prepare('SELECT id FROM users WHERE username = ?').get(req.params.username);
     if (!user) return res.status(404).json({ error: 'User not found' });
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = parseInt(req.query.offset as string) || 0;
     const following = db.prepare(`
       SELECT u.id, u.username, u.avatar, u.bio, u.tier
       FROM users u
       JOIN follows f ON u.id = f.following_id
       WHERE f.follower_id = ?
-    `).all(user.id);
+      LIMIT ? OFFSET ?
+    `).all(user.id, limit, offset);
     res.json(following);
   });
 
@@ -517,6 +563,121 @@ async function startServer() {
   app.get('/api/notifications/unread-count', authenticateToken, (req: any, res) => {
     const count: any = db.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').get(req.user.id);
     res.json({ count: count.count });
+  });
+
+  // --- Message Routes ---
+  app.get('/api/messages/conversations', authenticateToken, (req: any, res) => {
+    try {
+      const conversations = db.prepare(`
+        SELECT 
+          u.id as other_user_id, u.username, u.avatar, u.avatar_small, u.tier,
+          m.content as last_message, m.created_at as last_message_at, m.sender_id, m.is_read,
+          (SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND sender_id = u.id AND is_read = 0) as unread_count
+        FROM users u
+        JOIN messages m ON (m.sender_id = u.id AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = u.id)
+        WHERE m.id = (
+          SELECT id FROM messages 
+          WHERE (sender_id = u.id AND receiver_id = ?) OR (sender_id = ? AND receiver_id = u.id)
+          ORDER BY created_at DESC LIMIT 1
+        )
+        AND u.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id = ?)
+        AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id = ?)
+        ORDER BY m.created_at DESC
+      `).all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, req.user.id);
+      res.json(conversations);
+    } catch (e) {
+      console.error('Failed to fetch conversations:', e);
+      res.status(500).json({ error: 'Failed to fetch conversations' });
+    }
+  });
+
+  app.get('/api/messages/:userId', authenticateToken, (req: any, res) => {
+    const otherId = req.params.userId;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const q = req.query.q as string;
+
+    const otherUser = db.prepare('SELECT id, username, avatar FROM users WHERE id = ?').get(otherId);
+    if (!otherUser) return res.status(404).json({ error: 'User not found' });
+
+    const isBlocked = db.prepare('SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)')
+      .get(req.user.id, otherId, otherId, req.user.id);
+
+    let query = `
+      SELECT * FROM messages 
+      WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+    `;
+    const params: any[] = [req.user.id, otherId, otherId, req.user.id];
+
+    if (q) {
+      query += ` AND content LIKE ?`;
+      params.push(`%${q}%`);
+    }
+
+    query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+
+    const messages = db.prepare(query).all(...params);
+    
+    // Mark as read
+    db.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ?').run(otherId, req.user.id);
+    
+    res.json({
+      messages: messages.reverse(),
+      otherUser,
+      isBlocked: !!isBlocked
+    });
+  });
+
+  app.post('/api/messages', authenticateToken, (req: any, res) => {
+    const { receiver_id, content, image_url } = req.body;
+    if (!content && !image_url) return res.status(400).json({ error: 'Content or image required' });
+
+    // Check if blocked
+    const isBlocked = db.prepare('SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)')
+      .get(req.user.id, receiver_id, receiver_id, req.user.id);
+    if (isBlocked) return res.status(403).json({ error: 'User is blocked' });
+
+    const result = db.prepare('INSERT INTO messages (sender_id, receiver_id, content, image_url) VALUES (?, ?, ?, ?)')
+      .run(req.user.id, receiver_id, content || '', image_url || null);
+    
+    res.json({ id: result.lastInsertRowid, sender_id: req.user.id, receiver_id, content, image_url, created_at: new Date().toISOString() });
+  });
+
+  app.delete('/api/messages/:id', authenticateToken, (req: any, res) => {
+    const message: any = db.prepare('SELECT sender_id FROM messages WHERE id = ?').get(req.params.id);
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+    if (message.sender_id !== req.user.id) return res.status(403).json({ error: 'Unauthorized' });
+
+    db.prepare('DELETE FROM messages WHERE id = ?').run(req.params.id);
+    res.json({ message: 'Deleted' });
+  });
+
+  // --- Block Routes ---
+  app.post('/api/users/:id/block', authenticateToken, (req: any, res) => {
+    const targetId = req.params.id;
+    if (req.user.id === parseInt(targetId)) return res.status(400).json({ error: 'Cannot block yourself' });
+    
+    try {
+      db.prepare('INSERT INTO blocks (blocker_id, blocked_id) VALUES (?, ?)').run(req.user.id, targetId);
+      // Unfollow both ways
+      db.prepare('DELETE FROM follows WHERE (follower_id = ? AND following_id = ?) OR (follower_id = ? AND following_id = ?)')
+        .run(req.user.id, targetId, targetId, req.user.id);
+      res.json({ message: 'Blocked', isBlocked: true });
+    } catch (e) {
+      db.prepare('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?').run(req.user.id, targetId);
+      res.json({ message: 'Unblocked', isBlocked: false });
+    }
+  });
+
+  app.get('/api/blocks', authenticateToken, (req: any, res) => {
+    const blocked = db.prepare(`
+      SELECT u.id, u.username, u.avatar 
+      FROM users u
+      JOIN blocks b ON u.id = b.blocked_id
+      WHERE b.blocker_id = ?
+    `).all(req.user.id);
+    res.json(blocked);
   });
 
   // --- Vite / Static ---
