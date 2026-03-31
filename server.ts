@@ -120,6 +120,13 @@ async function startServer() {
   app.use(express.urlencoded({ limit: '10mb', extended: true }));
   app.use(cookieParser());
 
+  const isProd = process.env.NODE_ENV === 'production';
+  const cookieOptions: any = { 
+    httpOnly: true, 
+    secure: isProd, 
+    sameSite: isProd ? 'none' : 'lax' 
+  };
+
   // --- Auth Routes ---
   app.post('/api/auth/register', (req, res) => {
     const { username, password, inviteCode } = req.body;
@@ -154,7 +161,7 @@ async function startServer() {
       }
 
       const token = jwt.sign({ id: result.lastInsertRowid, username, tier }, JWT_SECRET);
-      res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none' });
+      res.cookie('token', token, cookieOptions);
       res.json({ message: 'Registered successfully', user: { id: result.lastInsertRowid, username, tier } });
     } catch (e) {
       res.status(400).json({ error: 'Username taken' });
@@ -169,12 +176,12 @@ async function startServer() {
     }
 
     const token = jwt.sign({ id: user.id, username: user.username, tier: user.tier }, JWT_SECRET);
-    res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none' });
+    res.cookie('token', token, cookieOptions);
     res.json({ message: 'Logged in', user: { id: user.id, username: user.username, tier: user.tier } });
   });
 
   app.post('/api/auth/logout', (req, res) => {
-    res.clearCookie('token', { httpOnly: true, secure: true, sameSite: 'none' });
+    res.clearCookie('token', cookieOptions);
     res.json({ message: 'Logged out' });
   });
 
