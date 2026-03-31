@@ -174,7 +174,7 @@ async function startServer() {
   });
 
   app.post('/api/auth/logout', (req, res) => {
-    res.clearCookie('token');
+    res.clearCookie('token', { httpOnly: true, secure: true, sameSite: 'none' });
     res.json({ message: 'Logged out' });
   });
 
@@ -416,8 +416,11 @@ async function startServer() {
     try {
       db.prepare('INSERT INTO follows (follower_id, following_id) VALUES (?, ?)').run(req.user.id, req.params.id);
       
+      const followsBack = db.prepare('SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ?').get(req.params.id, req.user.id);
+      const type = followsBack ? 'follow_back' : 'follow';
+
       db.prepare('INSERT INTO notifications (user_id, actor_id, type, target_id) VALUES (?, ?, ?, ?)')
-        .run(req.params.id, req.user.id, 'follow', req.user.id);
+        .run(req.params.id, req.user.id, type, req.user.id);
 
       res.json({ message: 'Followed' });
     } catch (e) {
@@ -480,8 +483,14 @@ async function startServer() {
   });
 
   app.post('/api/settings/password', authenticateToken, (req: any, res) => {
-    const { newPassword } = req.body;
-    if (!newPassword) return res.status(400).json({ error: 'New password required' });
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Missing fields' });
+    
+    const user: any = db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
+    if (!bcrypt.compareSync(currentPassword, user.password)) {
+      return res.status(400).json({ error: 'Incorrect current password' });
+    }
+
     const hashedPassword = bcrypt.hashSync(newPassword, 10);
     db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashedPassword, req.user.id);
     res.json({ message: 'Password updated' });

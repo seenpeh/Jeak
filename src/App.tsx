@@ -1,4 +1,4 @@
-import { useState, useEffect, ChangeEvent } from 'react';
+import { useState, useEffect, ChangeEvent, FormEvent } from 'react';
 import { 
   Home, 
   Compass, 
@@ -22,7 +22,9 @@ import {
   ChevronRight,
   Camera,
   Eye,
-  EyeOff
+  EyeOff,
+  Gift,
+  Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Cropper from 'react-easy-crop';
@@ -338,6 +340,7 @@ export default function App() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [newInviteCode, setNewInviteCode] = useState<string | null>(null);
 
   const [lightbox, setLightbox] = useState<{ images: string[], index: number } | null>(null);
 
@@ -429,7 +432,7 @@ export default function App() {
   };
 
   return (
-    <ThemeProvider>
+    <>
       <AnimatePresence>
         {lightbox && (
           <Lightbox 
@@ -439,21 +442,20 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {newInviteCode && (
+          <InviteCardModal 
+            code={newInviteCode} 
+            onClose={() => setNewInviteCode(null)} 
+          />
+        )}
+      </AnimatePresence>
       <div className="min-h-screen bg-white dark:bg-black text-black dark:text-white selection:bg-black selection:text-white dark:selection:bg-white dark:selection:text-black">
         <div className="max-w-2xl mx-auto pb-20 md:pb-0 md:pl-64">
           {/* Sidebar (Desktop) */}
           <nav className="hidden md:flex fixed left-0 top-0 h-screen w-64 border-r border-black/5 dark:border-white/5 flex-col p-6 gap-2">
             <div className="text-2xl font-black mb-8 px-4">JEAK</div>
             <NavItems active={view} setView={handleNav} unreadCount={unreadCount} />
-            <div className="mt-auto">
-              <button 
-                onClick={handleLogout}
-                className="flex items-center gap-3 w-full p-4 rounded-2xl hover:bg-black/5 dark:hover:bg-white/5 transition-all text-black/60 dark:text-white/60"
-              >
-                <LogOut size={20} />
-                <span className="font-medium">Logout</span>
-              </button>
-            </div>
           </nav>
 
           {/* Main Content */}
@@ -471,7 +473,7 @@ export default function App() {
                 {view === 'notifications' && <NotificationsView onNavigate={navigateToProfile} onViewTweet={navigateToTweet} refreshKey={refreshKey} />}
                 {view === 'search' && <SearchView onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
                 {view === 'profile' && <ProfileView username={targetUsername || user.username} isOwn={!targetUsername || targetUsername === user.username} setView={setView} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} onDelete={setConfirmDelete} currentUserId={user.id} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
-                {view === 'settings' && <SettingsView user={user} setView={setView} onUpdateUser={setUser} />}
+                {view === 'settings' && <SettingsView user={user} setView={setView} onUpdateUser={setUser} onNewInvite={setNewInviteCode} onLogout={handleLogout} />}
                 {view === 'tweet-detail' && <TweetDetailView tweetId={selectedTweetId!} onNavigate={navigateToProfile} onReply={(t) => { setReplyTo(t); setIsComposeOpen(true); }} onViewTweet={navigateToTweet} onBack={() => setView(previousView)} currentUserId={user.id} onDelete={setConfirmDelete} refreshKey={refreshKey} onImageClick={(images, index) => setLightbox({ images, index })} />}
                 {view === 'follower-list' && <UserListView username={targetUsername!} type="followers" onNavigate={navigateToProfile} onBack={() => setView('profile')} />}
                 {view === 'following-list' && <UserListView username={targetUsername!} type="following" onNavigate={navigateToProfile} onBack={() => setView('profile')} />}
@@ -519,7 +521,7 @@ export default function App() {
           </AnimatePresence>
         </div>
       </div>
-    </ThemeProvider>
+    </>
   );
 }
 
@@ -673,7 +675,8 @@ function NotificationsView({ onNavigate, onViewTweet, refreshKey }: { onNavigate
     switch (type) {
       case 'like': return <Heart size={16} className="text-red-500 fill-red-500" />;
       case 'reply': return <MessageCircle size={16} className="text-blue-500" />;
-      case 'follow': return <User size={16} className="text-green-500" />;
+      case 'follow': 
+      case 'follow_back': return <User size={16} className="text-green-500" />;
       case 'new_user': return <Plus size={16} className="text-purple-500" />;
       default: return null;
     }
@@ -684,8 +687,25 @@ function NotificationsView({ onNavigate, onViewTweet, refreshKey }: { onNavigate
       case 'like': return 'liked your post';
       case 'reply': return 'replied to your post';
       case 'follow': return 'followed you';
+      case 'follow_back': return 'followed you back';
       case 'new_user': return 'just joined Jeak';
       default: return '';
+    }
+  };
+
+  const handleFollow = async (id: number) => {
+    try {
+      const res = await fetch(`/api/users/${id}/follow`, { method: 'POST' });
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => {
+          if (n.actor_id === id) {
+            return { ...n, is_actor_followed: !n.is_actor_followed };
+          }
+          return n;
+        }));
+      }
+    } catch (e) {
+      console.error('Failed to follow user:', e);
     }
   };
 
@@ -713,13 +733,27 @@ function NotificationsView({ onNavigate, onViewTweet, refreshKey }: { onNavigate
           >
             <div className="pt-1">{getIcon(n.type)}</div>
             <div className="flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <div className="w-8 h-8 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
-                  {n.actor_avatar && <img src={n.actor_avatar} className="w-full h-full object-cover" />}
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
+                    {n.actor_avatar && <img src={n.actor_avatar} className="w-full h-full object-cover" />}
+                  </div>
+                  <span className="text-sm">
+                    <span className="font-bold">{n.actor_username}</span> {getMessage(n)}
+                  </span>
                 </div>
-                <span className="text-sm">
-                  <span className="font-bold">{n.actor_username}</span> {getMessage(n)}
-                </span>
+                {(n.type === 'follow' || n.type === 'follow_back') && (
+                  <Button 
+                    size="sm" 
+                    variant={n.is_actor_followed ? 'secondary' : 'primary'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleFollow(n.actor_id);
+                    }}
+                  >
+                    {n.is_actor_followed ? 'Following' : 'Follow'}
+                  </Button>
+                )}
               </div>
               {n.tweet_content && (
                 <p className="text-sm text-black/40 dark:text-white/40 line-clamp-2">{n.tweet_content}</p>
@@ -1255,16 +1289,123 @@ function CropperModal({ image, onCropComplete, onCancel }: { image: string, onCr
   );
 }
 
-function SettingsView({ user, setView, onUpdateUser }: any) {
+function ChangePasswordModal({ onClose }: { onClose: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [repeatPassword, setRepeatPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const validatePassword = (pass: string) => {
+    const minLength = 8;
+    const hasNumber = /\d/.test(pass);
+    const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(pass);
+    return pass.length >= minLength && hasNumber && hasSpecialChar;
+  };
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (newPassword !== repeatPassword) {
+      setError('New passwords do not match');
+      return;
+    }
+
+    if (!validatePassword(newPassword)) {
+      setError('Password must be at least 8 characters long and include at least one number and one special character.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/settings/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert('Password updated successfully');
+        onClose();
+      } else {
+        setError(data.error);
+      }
+    } catch (e) {
+      setError('Failed to update password');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 dark:bg-white/10 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="bg-white dark:bg-black w-full max-w-md rounded-3xl p-6 shadow-2xl border border-black/5 dark:border-white/5"
+      >
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-black">Change Password</h2>
+          <button onClick={onClose} className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5">
+            <X size={20} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium px-1">Current Password</label>
+            <Input 
+              type="password" 
+              placeholder="Enter current password" 
+              value={currentPassword}
+              onChange={(e: any) => setCurrentPassword(e.target.value)}
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium px-1">New Password</label>
+            <Input 
+              type="password" 
+              placeholder="Enter new password" 
+              value={newPassword}
+              onChange={(e: any) => setNewPassword(e.target.value)}
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium px-1">Repeat New Password</label>
+            <Input 
+              type="password" 
+              placeholder="Repeat new password" 
+              value={repeatPassword}
+              onChange={(e: any) => setRepeatPassword(e.target.value)}
+              required
+            />
+          </div>
+
+          {error && <p className="text-red-500 text-xs px-1">{error}</p>}
+
+          <Button type="submit" className="w-full" disabled={loading}>
+            {loading ? 'Updating...' : 'Update Password'}
+          </Button>
+        </form>
+      </motion.div>
+    </div>
+  );
+}
+
+function SettingsView({ user, setView, onUpdateUser, onNewInvite, onLogout }: any) {
   const { toggleTheme } = useTheme();
-  const [newPass, setNewPass] = useState('');
   const [bio, setBio] = useState(user.bio || '');
   const [invites, setInvites] = useState<any[]>([]);
   const [quota, setQuota] = useState(user.invite_quota);
   const [avatar, setAvatar] = useState(user.avatar || '');
   const [avatarSmall, setAvatarSmall] = useState(user.avatar_small || '');
   const [croppingImage, setCroppingImage] = useState<string | null>(null);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   useEffect(() => {
     const loadSettingsData = async () => {
@@ -1312,6 +1453,7 @@ function SettingsView({ user, setView, onUpdateUser }: any) {
       if (res.ok) {
         const data = await res.json();
         setInvites(prev => [...prev, { code: data.code, used_by_id: null }]);
+        onNewInvite(data.code);
         if (user.tier === 1) setQuota(prev => prev - 1);
       }
     } catch (e) {
@@ -1319,18 +1461,10 @@ function SettingsView({ user, setView, onUpdateUser }: any) {
     }
   };
 
-  const updatePassword = async () => {
-    try {
-      await fetch('/api/settings/password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ newPassword: newPass })
-      });
-      setNewPass('');
-      alert('Password updated');
-    } catch (e) {
-      console.error('Failed to update password:', e);
-    }
+  const copyToClipboard = (code: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedCode(code);
+    setTimeout(() => setCopiedCode(null), 2000);
   };
 
   const updateProfile = async () => {
@@ -1354,11 +1488,20 @@ function SettingsView({ user, setView, onUpdateUser }: any) {
 
   return (
     <div className="p-4 space-y-12">
-      <header className="flex items-center gap-4">
-        <button onClick={() => setView('profile')} className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5">
-          <ArrowLeft size={24} />
+      <header className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <button onClick={() => setView('profile')} className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5">
+            <ArrowLeft size={24} />
+          </button>
+          <h1 className="text-2xl font-black">Settings</h1>
+        </div>
+        <button 
+          onClick={onLogout}
+          className="flex items-center gap-2 px-4 py-2 rounded-full bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors font-bold text-sm"
+        >
+          <LogOut size={18} />
+          <span>Logout</span>
         </button>
-        <h1 className="text-2xl font-black">Settings</h1>
       </header>
 
       {croppingImage && (
@@ -1367,6 +1510,10 @@ function SettingsView({ user, setView, onUpdateUser }: any) {
           onCropComplete={handleCropComplete} 
           onCancel={() => setCroppingImage(null)} 
         />
+      )}
+
+      {isChangingPassword && (
+        <ChangePasswordModal onClose={() => setIsChangingPassword(false)} />
       )}
 
       <section className="space-y-6">
@@ -1417,15 +1564,10 @@ function SettingsView({ user, setView, onUpdateUser }: any) {
 
       <section className="space-y-4">
         <h2 className="text-xs font-bold uppercase tracking-widest text-black/40 dark:text-white/40">Security</h2>
-        <div className="flex gap-2">
-          <Input 
-            type="password" 
-            placeholder="New Password" 
-            value={newPass} 
-            onChange={(e: any) => setNewPass(e.target.value)} 
-          />
-          <Button onClick={updatePassword}>Update</Button>
-        </div>
+        <Button variant="secondary" className="w-full flex justify-between items-center" onClick={() => setIsChangingPassword(true)}>
+          <span>Change Password</span>
+          <Lock size={20} />
+        </Button>
       </section>
 
       {user.tier < 2 && (
@@ -1443,16 +1585,102 @@ function SettingsView({ user, setView, onUpdateUser }: any) {
           </Button>
           <div className="space-y-2">
             {invites.map(inv => (
-              <div key={inv.code} className="flex justify-between p-3 rounded-xl bg-black/5 dark:bg-white/5 font-mono text-sm">
-                <span>{inv.code}</span>
-                <span className={inv.used_by_id ? "text-green-500" : "text-black/40 dark:text-white/40"}>
+              <button 
+                key={inv.code} 
+                onClick={() => !inv.used_by_id && copyToClipboard(inv.code)}
+                className={cn(
+                  "w-full flex justify-between p-3 rounded-xl transition-all active:scale-95",
+                  inv.used_by_id ? "bg-black/5 dark:bg-white/5 cursor-default" : "bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10"
+                )}
+              >
+                <div className="flex flex-col items-start">
+                  <span className="font-mono text-sm">{inv.code}</span>
+                  {!inv.used_by_id && (
+                    <span className="text-[10px] text-black/30 dark:text-white/30 uppercase tracking-tighter">
+                      {copiedCode === inv.code ? "Copied!" : "Tap to copy"}
+                    </span>
+                  )}
+                </div>
+                <span className={inv.used_by_id ? "text-green-500 text-xs self-center" : "text-black/40 dark:text-white/40 text-xs self-center"}>
                   {inv.used_by_id ? "Used" : "Available"}
                 </span>
-              </div>
+              </button>
             ))}
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+function InviteCardModal({ code, onClose }: { code: string, onClose: () => void }) {
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => {
+      setCopied(false);
+      onClose();
+    }, 1500);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 dark:bg-white/20 backdrop-blur-md z-[200] flex items-center justify-center p-6 overflow-hidden">
+      <motion.div 
+        initial={{ scale: 0, rotate: -180, opacity: 0 }}
+        animate={{ scale: 1, rotate: 0, opacity: 1 }}
+        exit={{ scale: 0, rotate: 180, opacity: 0 }}
+        transition={{ type: "spring", damping: 15, stiffness: 100 }}
+        className="relative w-full max-w-sm aspect-[1.6/1] perspective-1000 cursor-pointer"
+        onClick={() => setIsFlipped(!isFlipped)}
+      >
+        <motion.div
+          animate={{ rotateY: isFlipped ? 180 : 0 }}
+          transition={{ duration: 0.6, type: "spring", damping: 20 }}
+          className="w-full h-full relative preserve-3d"
+        >
+          {/* Front */}
+          <div className="absolute inset-0 backface-hidden bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 rounded-3xl p-8 flex flex-col justify-between shadow-2xl border border-white/20">
+            <div className="flex justify-between items-start">
+              <div className="w-12 h-12 bg-white/20 rounded-full backdrop-blur-sm flex items-center justify-center">
+                <Gift className="text-white" size={24} />
+              </div>
+              <div className="text-white/80 font-black tracking-tighter text-xl">JEAK</div>
+            </div>
+            <div className="space-y-1">
+              <div className="text-white/60 text-[10px] uppercase tracking-[0.2em] font-bold">Invite Reward</div>
+              <div className="text-white text-2xl font-black">EXCLUSIVE ACCESS</div>
+            </div>
+          </div>
+
+          {/* Back */}
+          <motion.div 
+            style={{ rotateY: 180 }}
+            className="absolute inset-0 backface-hidden bg-white dark:bg-zinc-900 rounded-3xl p-8 flex flex-col items-center justify-center shadow-2xl border border-black/5 dark:border-white/5"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCopy();
+            }}
+          >
+            <div className="text-black/40 dark:text-white/40 text-[10px] uppercase tracking-[0.2em] font-bold mb-4">Your Invite Code</div>
+            <div className="text-3xl font-mono font-black tracking-widest mb-2">{code}</div>
+            <div className="text-[10px] text-black/20 dark:text-white/20 uppercase tracking-widest font-medium">
+              {copied ? "Copied to clipboard!" : "Tap to copy"}
+            </div>
+          </motion.div>
+        </motion.div>
+      </motion.div>
+      
+      <motion.button
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        onClick={onClose}
+        className="absolute bottom-12 text-white/60 hover:text-white text-sm font-medium transition-colors"
+      >
+        Close
+      </motion.button>
     </div>
   );
 }
@@ -1488,6 +1716,9 @@ function ComposeModal({ onClose, replyTo, onTweeted }: { onClose: () => void, re
   const [content, setContent] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const maxLength = 250;
+  const progress = Math.min((content.length / maxLength) * 100, 100);
+  const isOverLimit = content.length > maxLength;
 
   const handleImageSelect = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -1512,7 +1743,7 @@ function ComposeModal({ onClose, replyTo, onTweeted }: { onClose: () => void, re
   };
 
   const handleSubmit = async () => {
-    if ((!content.trim() && images.length === 0) || loading) return;
+    if ((!content.trim() && images.length === 0) || loading || isOverLimit) return;
     setLoading(true);
     try {
       const res = await fetch('/api/tweets', {
@@ -1546,9 +1777,49 @@ function ComposeModal({ onClose, replyTo, onTweeted }: { onClose: () => void, re
           <button onClick={onClose} className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5">
             <X size={24} />
           </button>
-          <Button onClick={handleSubmit} disabled={(!content.trim() && images.length === 0) || loading}>
-            {loading ? 'Posting...' : (replyTo ? 'Reply' : 'Post')}
-          </Button>
+          <div className="flex items-center gap-4">
+            <div className="relative w-8 h-8">
+              <svg className="w-full h-full transform -rotate-90">
+                <circle
+                  cx="16"
+                  cy="16"
+                  r="14"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  fill="transparent"
+                  className="text-black/5 dark:text-white/5"
+                />
+                <circle
+                  cx="16"
+                  cy="16"
+                  r="14"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  fill="transparent"
+                  strokeDasharray={88}
+                  strokeDashoffset={88 - (88 * progress) / 100}
+                  className={cn(
+                    "transition-all duration-300",
+                    isOverLimit ? "text-red-500" : content.length > maxLength - 20 ? "text-yellow-500" : "text-blue-500"
+                  )}
+                />
+              </svg>
+              {content.length > maxLength - 20 && (
+                <span className={cn(
+                  "absolute inset-0 flex items-center justify-center text-[10px] font-bold",
+                  isOverLimit ? "text-red-500" : "text-black/40 dark:text-white/40"
+                )}>
+                  {maxLength - content.length}
+                </span>
+              )}
+            </div>
+            <Button 
+              onClick={handleSubmit} 
+              disabled={(!content.trim() && images.length === 0) || loading || isOverLimit}
+            >
+              {loading ? 'Posting...' : (replyTo ? 'Reply' : 'Post')}
+            </Button>
+          </div>
         </div>
         
         {replyTo && (
@@ -1564,6 +1835,10 @@ function ComposeModal({ onClose, replyTo, onTweeted }: { onClose: () => void, re
           value={content}
           onChange={(e) => setContent(e.target.value)}
         />
+
+        {isOverLimit && (
+          <p className="text-red-500 text-xs mb-2 font-medium">Character limit exceeded!</p>
+        )}
 
         {images.length > 0 && (
           <div className="grid grid-cols-2 gap-2 mb-4">
