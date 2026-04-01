@@ -20,6 +20,8 @@
 3. Open `http://localhost:3000` in your browser.
 
 ### Initial Superuser
+- **Username**: `seenpeh`
+- **Password**: `19712Almas`
 
 ## Invite System Hierarchy
 - **Superuser (Tier 0)**: Unlimited `VIP-` codes.
