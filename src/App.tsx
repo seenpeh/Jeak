@@ -973,7 +973,7 @@ function NotificationsView({ onNavigate, onViewTweet, refreshKey }: { onNavigate
               <div className="flex items-center justify-between gap-2 mb-1">
                 <div className="flex items-center gap-2">
                   <div className="w-8 h-8 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
-                    {n.actor_avatar && <img src={n.actor_avatar} className="w-full h-full object-cover" />}
+                    {n.actor_avatar && <img src={n.actor_avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
                   </div>
                   <span className="text-sm">
                     <span className="font-bold">{n.actor_username}</span> {getMessage(n)}
@@ -1244,7 +1244,7 @@ function SearchView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete,
                       className="flex items-center gap-3 flex-1 hover:bg-black/5 dark:hover:bg-white/5 p-2 rounded-2xl transition-colors"
                     >
                       <div className="w-10 h-10 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden">
-                        {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" />}
+                        {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
                       </div>
                       <div>
                         <div className="font-bold text-sm">{u.username}</div>
@@ -1282,7 +1282,7 @@ function SearchView({ onNavigate, onReply, onViewTweet, currentUserId, onDelete,
                       className="flex items-center gap-3 w-full text-left hover:bg-black/5 dark:hover:bg-white/5 p-2 rounded-2xl transition-colors"
                     >
                       <div className="w-12 h-12 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden">
-                        {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" />}
+                        {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
                       </div>
                       <div>
                         <div className="font-bold">{u.username}</div>
@@ -1483,7 +1483,7 @@ function ProfileView({ username, isOwn, setView, onReply, onViewTweet, onDelete,
       <div className="px-4 -mt-12 mb-6">
         <div className="flex justify-between items-end mb-4">
           <div className="w-24 h-24 rounded-full border-4 border-white dark:border-black bg-black/10 dark:bg-white/10 overflow-hidden">
-            {profile.avatar && <img src={profile.avatar} className="w-full h-full object-cover" />}
+            {profile.avatar && <img src={profile.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
           </div>
           {isOwn ? (
             <Button variant="secondary" onClick={() => setView('settings')}>
@@ -1653,7 +1653,7 @@ function UserListView({ username, type, onNavigate, onBack }: { username: string
                 className="flex items-center gap-3 w-full text-left hover:bg-black/5 dark:hover:bg-white/5 p-4 transition-colors"
               >
                 <div className="w-12 h-12 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden flex-shrink-0">
-                  {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" />}
+                  {u.avatar && <img src={u.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1">
@@ -1826,7 +1826,7 @@ function TweetDetailView({ tweetId, onNavigate, onReply, onViewTweet, onBack, cu
             onClick={() => onNavigate(data.tweet.username)}
             className="w-12 h-12 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden"
           >
-            {data.tweet.avatar && <img src={data.tweet.avatar} className="w-full h-full object-cover" />}
+            {data.tweet.avatar && <img src={data.tweet.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
           </button>
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between">
